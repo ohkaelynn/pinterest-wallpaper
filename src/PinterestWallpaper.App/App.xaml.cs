@@ -87,6 +87,8 @@ public partial class App : Application
         {
             ExecuteCommand(startupCommand);
         }
+
+        MemoryTrimmer.TrimIdleMemory();
     }
 
     private void OpenSettings()
@@ -112,7 +114,11 @@ public partial class App : Application
             OpenPinterestLogin,
             () => _ = RunSyncAsync(isManual: true),
             () => SignOutAsync(showNotification: false));
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Closed += (_, _) =>
+        {
+            _settingsWindow = null;
+            MemoryTrimmer.TrimIdleMemory();
+        };
         _settingsWindow.Show();
     }
 
@@ -145,6 +151,8 @@ public partial class App : Application
                 _db.SetStateValue(PinterestSyncService.SessionStatusKey, "signed_in");
                 _settingsWindow?.RefreshStatus();
             }
+
+            MemoryTrimmer.TrimIdleMemory();
         };
         loginWindow.Show();
     }
@@ -193,6 +201,10 @@ public partial class App : Application
             {
                 _tray?.ShowNotification("Pinterest Sync Error", ex.Message);
             }
+        }
+        finally
+        {
+            MemoryTrimmer.TrimIdleMemory();
         }
     }
 
@@ -252,6 +264,7 @@ public partial class App : Application
         }
 
         var result = await _syncService.TryLikePinAsync(saved, _syncCts.Token);
+        MemoryTrimmer.TrimIdleMemory();
         _tray?.ShowNotification("Pinterest Wallpaper", result.Message);
 
         if (result.FallbackToBrowser)
@@ -281,6 +294,7 @@ public partial class App : Application
         }
 
         var result = await _syncService.TrySavePinAsync(saved, _config.Actions, _syncCts.Token);
+        MemoryTrimmer.TrimIdleMemory();
         _tray?.ShowNotification("Pinterest Wallpaper", result.Message);
 
         if (result.FallbackToBrowser)

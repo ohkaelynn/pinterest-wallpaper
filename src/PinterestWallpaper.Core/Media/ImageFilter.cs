@@ -37,7 +37,11 @@ public static class ImageFilter
             return new ImageCheckResult(false, "Unsupported image extension.");
         }
 
-        // Fast header-only dimension check before decoding full pixels.
+        // Fast header-only dimension check + low-memory scaled decode (never loads full 4K/8K bitmap into RAM).
+        int width;
+        int height;
+        ulong hash;
+
         using (var codec = SKCodec.Create(filePath))
         {
             if (codec is null || codec.Info.Width <= 0 || codec.Info.Height <= 0)
@@ -45,32 +49,46 @@ public static class ImageFilter
                 return new ImageCheckResult(false, "Could not decode image.");
             }
 
-            var headerCheck = ValidateDimensions(codec.Info.Width, codec.Info.Height, filter);
+            width = codec.Info.Width;
+            height = codec.Info.Height;
+
+            var headerCheck = ValidateDimensions(width, height, filter);
             if (!headerCheck.IsValid)
             {
                 return headerCheck;
             }
+
+            // Decode at a tiny scaled size (e.g. ~128px) instead of full 4K/8K to verify integrity & compute dHash.
+            var scale = Math.Min(1f, 128f / Math.Max(width, height));
+            var scaled = codec.GetScaledDimensions(scale);
+            var decodeInfo = new SKImageInfo(
+                Math.Max(9, scaled.Width),
+                Math.Max(8, scaled.Height),
+                SKColorType.Rgba8888,
+                SKAlphaType.Premul);
+
+            using var smallBitmap = new SKBitmap(decodeInfo);
+            var decodeResult = codec.GetPixels(decodeInfo, smallBitmap.GetPixels());
+            if (decodeResult is not (SKCodecResult.Success or SKCodecResult.IncompleteInput))
+            {
+                return new ImageCheckResult(false, "Could not decode image.");
+            }
+
+            hash = ComputeDifferenceHash(smallBitmap);
         }
 
-        using var bitmap = SKBitmap.Decode(filePath);
-        if (bitmap is null || bitmap.Width <= 0 || bitmap.Height <= 0)
-        {
-            return new ImageCheckResult(false, "Could not decode image.");
-        }
-
-        var hash = ComputeDifferenceHash(bitmap);
         if (filter.DeduplicateSimilar && existingHashes is not null)
         {
             foreach (var existing in existingHashes)
             {
                 if (HammingDistance(hash, existing) <= maxDuplicateHammingDistance)
                 {
-                    return new ImageCheckResult(false, "Duplicate or near-duplicate image.", bitmap.Width, bitmap.Height, hash);
+                    return new ImageCheckResult(false, "Duplicate or near-duplicate image.", width, height, hash);
                 }
             }
         }
 
-        return new ImageCheckResult(true, null, bitmap.Width, bitmap.Height, hash);
+        return new ImageCheckResult(true, null, width, height, hash);
     }
 
     public static ImageCheckResult ValidateDimensions(int width, int height, FilterConfig filter)
