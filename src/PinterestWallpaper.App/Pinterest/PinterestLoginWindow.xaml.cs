@@ -14,6 +14,7 @@ public partial class PinterestLoginWindow : Window
         InitializeComponent();
         Windows.DarkTitleBarHelper.Enable(this);
         Loaded += OnLoaded;
+        Closed += (_, _) => WebView2Cleanup.DisposeAndRelease(WebView);
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)

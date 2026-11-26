@@ -319,8 +319,7 @@ public sealed class PinterestSyncService : IDisposable
             }
             finally
             {
-                webView?.Dispose();
-                hostWindow?.Close();
+                WebView2Cleanup.DisposeAndRelease(webView, hostWindow);
             }
         });
 
@@ -599,8 +598,7 @@ public sealed class PinterestSyncService : IDisposable
             }
             finally
             {
-                webView?.Dispose();
-                hostWindow?.Close();
+                WebView2Cleanup.DisposeAndRelease(webView, hostWindow);
             }
         });
 
@@ -778,8 +776,7 @@ public sealed class PinterestSyncService : IDisposable
             }
             finally
             {
-                webView?.Dispose();
-                hostWindow?.Close();
+                WebView2Cleanup.DisposeAndRelease(webView, hostWindow);
             }
         });
 
