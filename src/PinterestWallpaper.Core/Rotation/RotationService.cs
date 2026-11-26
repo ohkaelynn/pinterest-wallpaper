@@ -16,23 +16,22 @@ public sealed class RotationService
     private int _historyIndex = -1;
 
     public bool IsPaused { get; set; }
-    public bool IsCurrentPinned { get; private set; }
 
     public IReadOnlyList<PinRecord> CurrentPins =>
         _historyIndex >= 0 && _historyIndex < _sessionHistory.Count
             ? _sessionHistory[_historyIndex]
             : [];
 
-    public bool TogglePinCurrent()
+    public PinRecord? MarkCurrentFavorite()
     {
-        if (CurrentPins.Count == 0)
+        var current = CurrentPins.FirstOrDefault();
+        if (current is null)
         {
-            IsCurrentPinned = false;
-            return false;
+            return null;
         }
 
-        IsCurrentPinned = !IsCurrentPinned;
-        return IsCurrentPinned;
+        _db.SetFavorite(current.PinId, true);
+        return current with { IsFavorite = true };
     }
 
     public RotationService(
@@ -58,7 +57,7 @@ public sealed class RotationService
 
     public bool ShouldSkipScheduledRotation(RotationConfig config)
     {
-        if (!config.Enabled || IsPaused || IsCurrentPinned)
+        if (!config.Enabled || IsPaused)
         {
             return true;
         }
@@ -81,11 +80,6 @@ public sealed class RotationService
         if (!isManual && ShouldSkipScheduledRotation(config.Rotation))
         {
             return false;
-        }
-
-        if (isManual)
-        {
-            IsCurrentPinned = false;
         }
 
         // If user navigated backward earlier, step forward through existing history first.
@@ -161,7 +155,6 @@ public sealed class RotationService
             return false;
         }
 
-        IsCurrentPinned = false;
         _historyIndex--;
         var previous = _sessionHistory[_historyIndex];
         if (!previous.All(p => File.Exists(p.LocalPath)))

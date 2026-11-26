@@ -41,14 +41,11 @@ public sealed class RotationServiceTests : IDisposable
         state.Fullscreen = true;
         Assert.False(service.NextWallpaper(config, isManual: false));
 
-        // Pinning current wallpaper blocks scheduled rotation until unpinned or manually swapped
+        // Marking current wallpaper as favorite/saved persists in SQLite
         state.Fullscreen = false;
-        Assert.True(service.TogglePinCurrent());
-        Assert.True(service.IsCurrentPinned);
-        Assert.False(service.NextWallpaper(config, isManual: false));
-
-        Assert.True(service.NextWallpaper(config, isManual: true));
-        Assert.False(service.IsCurrentPinned);
+        var fav = service.MarkCurrentFavorite();
+        Assert.NotNull(fav);
+        Assert.True(db.GetPinById(fav!.PinId)?.IsFavorite);
 
         // Skip & block removes current pin and advances
         var blockedId = service.CurrentPins.Single().PinId;

@@ -11,7 +11,7 @@ public static class ContextMenuRegistrar
     [
         ("01_Next", "Next Wallpaper", AppCommand.Next, false),
         ("02_Prev", "Previous Wallpaper", AppCommand.Previous, false),
-        ("03_Pin", "Pin / Unpin Current Wallpaper", AppCommand.TogglePin, true),
+        ("03_SavePin", "Save / Pin to Pinterest", AppCommand.SaveToPinterest, true),
         ("04_Open", "Open Pin in Browser", AppCommand.OpenPin, false),
         ("05_Skip", "Skip && Hide This Wallpaper", AppCommand.SkipAndHide, true),
         ("06_Pause", "Pause / Resume Rotation", AppCommand.TogglePause, false)

@@ -9,7 +9,7 @@ namespace PinterestWallpaper.App.Windows;
 public sealed class TrayIconHost : IDisposable
 {
     private readonly NotifyIcon _notifyIcon;
-    private readonly ToolStripMenuItem _pinItem;
+    private readonly ToolStripMenuItem _savePinItem;
     private readonly ToolStripMenuItem _pauseItem;
     private readonly ToolStripMenuItem _contextMenuItem;
     private readonly AppPaths _paths;
@@ -33,8 +33,8 @@ public sealed class TrayIconHost : IDisposable
         menu.Items.Add("Next Wallpaper", null, (_, _) => executeCommand(AppCommand.Next));
         menu.Items.Add("Previous Wallpaper", null, (_, _) => executeCommand(AppCommand.Previous));
 
-        _pinItem = new ToolStripMenuItem("Pin Current Wallpaper", null, (_, _) => executeCommand(AppCommand.TogglePin));
-        menu.Items.Add(_pinItem);
+        _savePinItem = new ToolStripMenuItem("Save / Pin to Pinterest", null, (_, _) => executeCommand(AppCommand.SaveToPinterest));
+        menu.Items.Add(_savePinItem);
         menu.Items.Add("Open Current Pin", null, (_, _) => executeCommand(AppCommand.OpenPin));
         menu.Items.Add("Skip & Hide Current", null, (_, _) => executeCommand(AppCommand.SkipAndHide));
 
@@ -65,9 +65,7 @@ public sealed class TrayIconHost : IDisposable
 
     public void RefreshState()
     {
-        _pinItem.Checked = _rotation.IsCurrentPinned;
-        _pinItem.Text = _rotation.IsCurrentPinned ? "Unpin Current Wallpaper" : "Pin Current Wallpaper";
-        _pinItem.Enabled = _rotation.CurrentPins.Count > 0;
+        _savePinItem.Enabled = _rotation.CurrentPins.Count > 0;
 
         _pauseItem.Checked = _rotation.IsPaused;
         _pauseItem.Text = _rotation.IsPaused ? "Resume Rotation" : "Pause Rotation";

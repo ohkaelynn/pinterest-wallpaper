@@ -5,10 +5,10 @@ public enum AppCommand
     None,
     Next,
     Previous,
+    SaveToPinterest,
     OpenPin,
     SkipAndHide,
-    TogglePause,
-    TogglePin
+    TogglePause
 }
 
 public static class CommandParser
@@ -27,10 +27,10 @@ public static class CommandParser
     {
         "--next" or "next" => AppCommand.Next,
         "--prev" or "--previous" or "prev" => AppCommand.Previous,
+        "--save-pin" or "save-pin" => AppCommand.SaveToPinterest,
         "--open-pin" or "open-pin" => AppCommand.OpenPin,
         "--skip" or "skip" => AppCommand.SkipAndHide,
         "--toggle-pause" or "toggle-pause" => AppCommand.TogglePause,
-        "--toggle-pin" or "toggle-pin" => AppCommand.TogglePin,
         _ => AppCommand.None
     };
 
@@ -38,10 +38,10 @@ public static class CommandParser
     {
         AppCommand.Next => "--next",
         AppCommand.Previous => "--prev",
+        AppCommand.SaveToPinterest => "--save-pin",
         AppCommand.OpenPin => "--open-pin",
         AppCommand.SkipAndHide => "--skip",
         AppCommand.TogglePause => "--toggle-pause",
-        AppCommand.TogglePin => "--toggle-pin",
         _ => string.Empty
     };
 }

@@ -175,6 +175,15 @@ public sealed class StateDatabase : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    public void SetFavorite(string pinId, bool isFavorite)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "UPDATE pins SET is_favorite = $fav WHERE pin_id = $pinId;";
+        cmd.Parameters.AddWithValue("$pinId", pinId);
+        cmd.Parameters.AddWithValue("$fav", isFavorite ? 1 : 0);
+        cmd.ExecuteNonQuery();
+    }
+
     public int GetUnseenCount()
     {
         using var cmd = _connection.CreateCommand();

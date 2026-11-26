@@ -100,8 +100,8 @@ public partial class App : Application
             case AppCommand.TogglePause:
                 _rotation.IsPaused = !_rotation.IsPaused;
                 break;
-            case AppCommand.TogglePin:
-                _rotation.TogglePinCurrent();
+            case AppCommand.SaveToPinterest:
+                SaveCurrentToPinterest();
                 break;
             case AppCommand.OpenPin:
                 OpenCurrentPin();
@@ -109,6 +109,22 @@ public partial class App : Application
         }
 
         _tray?.RefreshState();
+    }
+
+    private void SaveCurrentToPinterest()
+    {
+        var saved = _rotation?.MarkCurrentFavorite();
+        if (saved is null)
+        {
+            return;
+        }
+
+        // Phase 3 will save directly to a configured Pinterest board via WebView2.
+        // For now, open the pin's Pinterest page so you can save/like it with one click.
+        if (!string.IsNullOrWhiteSpace(saved.PinUrl))
+        {
+            Process.Start(new ProcessStartInfo(saved.PinUrl) { UseShellExecute = true });
+        }
     }
 
     private void OpenCurrentPin()

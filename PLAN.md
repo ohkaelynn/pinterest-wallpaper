@@ -61,15 +61,16 @@
    - *Done when:* App rotates local test wallpapers reliably on a timer and via tray menu.
 
 2. **Phase 2 — Desktop Right-Click Menu**
-   - Add single-instance Named Pipe IPC so invoking `PinterestWallpaper.exe --next` (or `--prev`, `--open-pin`, `--skip`, `--toggle-pin`, `--toggle-pause`) tells the running app to act immediately (<150ms).
-   - Add **Pin Current Wallpaper** option to lock the current wallpaper against timed swaps until unpinned.
+   - Add single-instance Named Pipe IPC so invoking `PinterestWallpaper.exe --next` (or `--prev`, `--save-pin`, `--open-pin`, `--skip`, `--toggle-pause`) tells the running app to act immediately (<150ms).
+   - Add **Save / Pin to Pinterest** action (marks favorite locally and opens the pin on Pinterest; Phase 3 wires direct board-saving via WebView2).
    - Add toggleable `HKCU` Registry installer/uninstaller for the desktop right-click submenu.
-   - *Done when:* Right-clicking the desktop swaps, pins, or skips wallpapers instantly.
+   - *Done when:* Right-clicking the desktop swaps, saves, or skips wallpapers instantly.
 
 3. **Phase 3 — Personal Pinterest Sync (WebView2)**
    - Embed WebView2 for one-time interactive login (`pinterest.com/login`).
    - Add **Rate-Limit Governor** (cooldowns, daily sync cap, randomized delays, sequential image downloads, backoff on `429`/challenges).
    - Extract high-res (`originals`) image URLs from configured boards, search terms, and optional home feed into the local cache.
+   - Wire **Save / Pin to Pinterest** to save the current wallpaper directly to a chosen Pinterest board via the logged-in WebView2 session.
    - *Done when:* Local cache refills naturally in the background without aggressive requests.
 
 4. **Phase 4 — Settings UI & Polish**
