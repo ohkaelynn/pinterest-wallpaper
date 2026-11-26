@@ -63,10 +63,12 @@ jobs:
       - name: Generate SHA-256 Checksums
         shell: pwsh
         run: |
-          Get-ChildItem dist/* | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)"
-          } | Out-File -Encoding ascii dist/SHA256SUMS.txt
+          $files = Get-ChildItem dist/* -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' }
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($f.Name)"
+          }
+          $lines | Out-File -Encoding ascii dist/SHA256SUMS.txt
           Get-Content dist/SHA256SUMS.txt
 
       - name: Create GitHub Release
