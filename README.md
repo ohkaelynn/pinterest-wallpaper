@@ -7,6 +7,20 @@ A lightweight Windows wallpaper swapper—like Windows' built-in slideshow—pow
 > **Open-Source & AI-Generated:** Built transparently with AI assistance using **C# / .NET 8 + WebView2**.  
 > **Unofficial Personal-Use Tool:** Not affiliated with Pinterest. Uses your own logged-in WebView2 browser session with gentle background syncing—never aggressive scraping.
 
+## Screenshots
+
+| Sources & Save | Filters & Limits |
+| :---: | :---: |
+| ![Sources & Save](assets/screenshots/settings-sources.png) | ![Filters & Limits](assets/screenshots/settings-filters.png) |
+
+| Rotation & Display | Account & Status |
+| :---: | :---: |
+| ![Rotation & Display](assets/screenshots/settings-rotation.png) | ![Account & Status](assets/screenshots/settings-account.png) |
+
+| Desktop Right-Click Menu | System Tray Menu |
+| :---: | :---: |
+| <img src="assets/screenshots/desktop-menu.png" alt="Desktop Right-Click Menu" width="210"> | <img src="assets/screenshots/tray-menu.png" alt="System Tray Menu" width="210"> |
+
 ## Features
 
 - **Personal Account, No API Needed** — Sign in once inside Microsoft Edge WebView2 (supports 2FA/SSO; your password is never seen or stored). Pulls your own boards (including private/secret boards) right into the Settings dropdowns.
