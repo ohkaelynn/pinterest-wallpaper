@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve Version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "${{ github.ref_name }}" }
+          $ver = $tag.TrimStart('v')
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "APP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Run Unit Tests
+        run: dotnet test PinterestWallpaper.sln -c Release
+
+      - name: Publish Self-Contained win-x64
+        run: >
+          dotnet publish src/PinterestWallpaper.App/PinterestWallpaper.App.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:Version=${{ env.APP_VERSION }}
+          -p:PublishReadyToRun=true
+          -o publish/win-x64
+
+      - name: Package Portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $zipPath = "dist/PinterestWallpaper-${{ env.RELEASE_TAG }}-win-x64-portable.zip"
+          Compress-Archive -Path "publish/win-x64/*" -DestinationPath $zipPath -Force
+
+      - name: Build Per-User Inno Setup Installer
+        shell: pwsh
+        run: |
+          iscc "/DAppVersion=${{ env.APP_VERSION }}" "/DPublishDir=..\publish\win-x64" installer/PinterestWallpaper.iss
+
+      - name: Generate SHA-256 Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/* | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Out-File -Encoding ascii dist/SHA256SUMS.txt
+          Get-Content dist/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release create "${{ env.RELEASE_TAG }}" `
+            "dist/PinterestWallpaper-${{ env.RELEASE_TAG }}-win-x64-setup.exe" `
+            "dist/PinterestWallpaper-${{ env.RELEASE_TAG }}-win-x64-portable.zip" `
+            "dist/SHA256SUMS.txt" `
+            --title "Pinterest Wallpaper Swapper ${{ env.RELEASE_TAG }}" `
+            --generate-notes

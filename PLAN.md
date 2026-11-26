@@ -76,6 +76,6 @@
    - Verified silent background **Like on Pinterest** and **Save to Board**, dark tray menu, and custom `PW` app icon.
    - Strict `pinterest.*` / `*.pinimg.com` URL allowlist, 50 MB download cap, and Sign Out & Clear Session.
 
-5. **Phase 5 — Release & Optional Win11 Top-Level Menu** *(Next)*
-   - Portable ZIP / installer packaging and optional GitHub Actions release builds with SHA-256 checksums.
-   - Optional: Sparse MSIX + `IExplorerCommand` so *Pinterest Wallpaper* appears directly in Windows 11's top-level context menu.
+5. **Phase 5 — Release & Optional Win11 Top-Level Menu** *(Done — Win11 Sparse MSIX optional)*
+   - Per-user Inno Setup installer (`installer/PinterestWallpaper.iss`) + Portable ZIP + GitHub Actions CI & Release workflows (`.github/workflows/ci.yml`, `.github/workflows/release.yml`) with `SHA256SUMS.txt`.
+   - Optional future enhancement: Sparse MSIX + `IExplorerCommand` so *Pinterest Wallpaper* appears directly in Windows 11's top-level context menu.
