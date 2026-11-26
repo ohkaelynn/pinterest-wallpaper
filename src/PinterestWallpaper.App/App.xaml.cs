@@ -3,9 +3,11 @@ using System.IO;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
+using PinterestWallpaper.App.Pinterest;
 using PinterestWallpaper.App.Windows;
 using PinterestWallpaper.Core.Config;
 using PinterestWallpaper.Core.Ipc;
+using PinterestWallpaper.Core.Pinterest;
 using PinterestWallpaper.Core.Rotation;
 using PinterestWallpaper.Core.Storage;
 using Application = System.Windows.Application;
@@ -22,6 +24,9 @@ public partial class App : Application
     private ConfigStore? _configStore;
     private AppConfig? _config;
     private StateDatabase? _db;
+    private RateLimitGovernor? _governor;
+    private PinterestSyncService? _syncService;
+    private CancellationTokenSource? _syncCts;
     private RotationService? _rotation;
     private TrayIconHost? _tray;
     private DispatcherTimer? _timer;
@@ -53,6 +58,10 @@ public partial class App : Application
         SyncContextMenuRegistration(_config.Shell.DesktopContextMenu);
 
         _db = new StateDatabase(_paths.DatabaseFile);
+        _governor = new RateLimitGovernor(_db);
+        _syncCts = new CancellationTokenSource();
+        _syncService = new PinterestSyncService(_paths, _db, _governor);
+
         var applier = new DesktopWallpaperApplier();
         var systemState = new WindowsSystemStateProvider();
         _rotation = new RotationService(_db, applier, systemState);
@@ -62,6 +71,8 @@ public partial class App : Application
             () => _config,
             _rotation,
             ExecuteCommand,
+            OpenPinterestLogin,
+            () => _ = RunSyncAsync(isManual: true),
             ToggleContextMenu,
             ReloadConfig,
             Shutdown);
@@ -76,6 +87,45 @@ public partial class App : Application
         if (startupCommand != AppCommand.None)
         {
             ExecuteCommand(startupCommand);
+        }
+    }
+
+    private void OpenPinterestLogin()
+    {
+        if (_paths is null)
+        {
+            return;
+        }
+
+        var loginWindow = new PinterestLoginWindow(_paths.WebView2Directory);
+        loginWindow.Show();
+    }
+
+    private async Task RunSyncAsync(bool isManual)
+    {
+        if (_syncService is null || _config is null || _syncCts is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _syncService.TrySyncAsync(_config, isManual, _syncCts.Token);
+            if (isManual || result.PinsAdded > 0 || result.Message.Contains("expired", StringComparison.OrdinalIgnoreCase))
+            {
+                _tray?.ShowNotification("Pinterest Wallpaper", result.Message);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // App shutting down.
+        }
+        catch (Exception ex)
+        {
+            if (isManual)
+            {
+                _tray?.ShowNotification("Pinterest Sync Error", ex.Message);
+            }
         }
     }
 
@@ -119,8 +169,6 @@ public partial class App : Application
             return;
         }
 
-        // Phase 3 will save directly to a configured Pinterest board via WebView2.
-        // For now, open the pin's Pinterest page so you can save/like it with one click.
         if (!string.IsNullOrWhiteSpace(saved.PinUrl))
         {
             Process.Start(new ProcessStartInfo(saved.PinUrl) { UseShellExecute = true });
@@ -188,6 +236,9 @@ public partial class App : Application
             _rotation.NextWallpaper(_config, isManual: false);
             _tray?.RefreshState();
             ScheduleNextTick();
+
+            // Check in the background whether the local pool is low (governor enforces cooldowns).
+            _ = RunSyncAsync(isManual: false);
         }
     }
 
@@ -219,6 +270,9 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _timer?.Stop();
+        _syncCts?.Cancel();
+        _syncService?.Dispose();
+        _syncCts?.Dispose();
         _ipcServer?.Dispose();
         _tray?.Dispose();
         _db?.Dispose();

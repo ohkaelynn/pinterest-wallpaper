@@ -21,6 +21,8 @@ public sealed class TrayIconHost : IDisposable
         Func<AppConfig> getConfig,
         RotationService rotation,
         Action<AppCommand> executeCommand,
+        Action openPinterestLogin,
+        Action syncNow,
         Action toggleContextMenu,
         Action reloadConfig,
         Action exitApp)
@@ -40,6 +42,10 @@ public sealed class TrayIconHost : IDisposable
 
         _pauseItem = new ToolStripMenuItem("Pause Rotation", null, (_, _) => executeCommand(AppCommand.TogglePause));
         menu.Items.Add(_pauseItem);
+
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Sign in to Pinterest...", null, (_, _) => openPinterestLogin());
+        menu.Items.Add("Sync Now (if cooldown allows)", null, (_, _) => syncNow());
 
         menu.Items.Add(new ToolStripSeparator());
         _contextMenuItem = new ToolStripMenuItem("Desktop Right-Click Menu", null, (_, _) => toggleContextMenu());
@@ -73,6 +79,11 @@ public sealed class TrayIconHost : IDisposable
         _contextMenuItem.Checked = ContextMenuRegistrar.IsInstalled();
     }
 
+    public void ShowNotification(string title, string message)
+    {
+        _notifyIcon.ShowBalloonTip(3500, title, message, ToolTipIcon.Info);
+    }
+
     private void ImportLocalFolder()
     {
         using var dialog = new FolderBrowserDialog
@@ -83,11 +94,7 @@ public sealed class TrayIconHost : IDisposable
         if (dialog.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(dialog.SelectedPath))
         {
             var added = _rotation.ImportLocalFolder(dialog.SelectedPath, _getConfig().Filters, _paths.CacheDirectory);
-            _notifyIcon.ShowBalloonTip(
-                3000,
-                "Pinterest Wallpaper",
-                $"Imported {added} valid wallpaper(s) into local cache.",
-                ToolTipIcon.Info);
+            ShowNotification("Pinterest Wallpaper", $"Imported {added} valid wallpaper(s) into local cache.");
         }
     }
 

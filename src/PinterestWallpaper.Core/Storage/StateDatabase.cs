@@ -56,6 +56,11 @@ public sealed class StateDatabase : IDisposable
                 status TEXT NOT NULL,
                 pins_added INTEGER NOT NULL DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS kv_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """;
         cmd.ExecuteNonQuery();
     }
@@ -193,6 +198,83 @@ public sealed class StateDatabase : IDisposable
             WHERE b.pin_id IS NULL AND p.last_shown_at_utc IS NULL;
             """;
         return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    public void RecordSync(DateTimeOffset syncedAtUtc, string status, int pinsAdded)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO sync_log (synced_at_utc, status, pins_added)
+            VALUES ($now, $status, $added);
+            """;
+        cmd.Parameters.AddWithValue("$now", syncedAtUtc.ToString("O"));
+        cmd.Parameters.AddWithValue("$status", status);
+        cmd.Parameters.AddWithValue("$added", pinsAdded);
+        cmd.ExecuteNonQuery();
+    }
+
+    public DateTimeOffset? GetLastSyncTimeUtc()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT synced_at_utc FROM sync_log ORDER BY id DESC LIMIT 1;";
+        var result = cmd.ExecuteScalar() as string;
+        return result is null ? null : DateTimeOffset.Parse(result);
+    }
+
+    public int GetSyncCountSince(DateTimeOffset sinceUtc)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sync_log WHERE synced_at_utc >= $since;";
+        cmd.Parameters.AddWithValue("$since", sinceUtc.ToString("O"));
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    public string? GetStateValue(string key)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT value FROM kv_state WHERE key = $key LIMIT 1;";
+        cmd.Parameters.AddWithValue("$key", key);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    public void SetStateValue(string key, string value)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO kv_state (key, value) VALUES ($key, $val)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$val", value);
+        cmd.ExecuteNonQuery();
+    }
+
+    public void DeleteStateValue(string key)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM kv_state WHERE key = $key;";
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<PinRecord> GetEvictablePins()
+    {
+        var results = new List<PinRecord>();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT pin_id, source_type, source_value, pin_url, local_path,
+                   width, height, perceptual_hash, added_at_utc, last_shown_at_utc, is_favorite
+            FROM pins
+            WHERE is_favorite = 0 AND last_shown_at_utc IS NOT NULL
+            ORDER BY last_shown_at_utc ASC;
+            """;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(ReadPin(reader));
+        }
+
+        return results;
     }
 
     private static PinRecord ReadPin(SqliteDataReader reader)
