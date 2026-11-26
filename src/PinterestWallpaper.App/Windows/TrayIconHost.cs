@@ -9,7 +9,9 @@ namespace PinterestWallpaper.App.Windows;
 public sealed class TrayIconHost : IDisposable
 {
     private readonly NotifyIcon _notifyIcon;
+    private readonly ToolStripMenuItem _pinItem;
     private readonly ToolStripMenuItem _pauseItem;
+    private readonly ToolStripMenuItem _contextMenuItem;
     private readonly AppPaths _paths;
     private readonly Func<AppConfig> _getConfig;
     private readonly RotationService _rotation;
@@ -18,6 +20,8 @@ public sealed class TrayIconHost : IDisposable
         AppPaths paths,
         Func<AppConfig> getConfig,
         RotationService rotation,
+        Action<AppCommand> executeCommand,
+        Action toggleContextMenu,
         Action reloadConfig,
         Action exitApp)
     {
@@ -26,14 +30,20 @@ public sealed class TrayIconHost : IDisposable
         _rotation = rotation;
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Next Wallpaper", null, (_, _) => _rotation.NextWallpaper(_getConfig(), isManual: true));
-        menu.Items.Add("Previous Wallpaper", null, (_, _) => _rotation.PreviousWallpaper(_getConfig()));
-        menu.Items.Add("Skip & Hide Current", null, (_, _) => _rotation.SkipAndBlockCurrent(_getConfig()));
+        menu.Items.Add("Next Wallpaper", null, (_, _) => executeCommand(AppCommand.Next));
+        menu.Items.Add("Previous Wallpaper", null, (_, _) => executeCommand(AppCommand.Previous));
 
-        _pauseItem = new ToolStripMenuItem("Pause Rotation", null, (_, _) => TogglePause());
+        _pinItem = new ToolStripMenuItem("Pin Current Wallpaper", null, (_, _) => executeCommand(AppCommand.TogglePin));
+        menu.Items.Add(_pinItem);
+        menu.Items.Add("Open Current Pin", null, (_, _) => executeCommand(AppCommand.OpenPin));
+        menu.Items.Add("Skip & Hide Current", null, (_, _) => executeCommand(AppCommand.SkipAndHide));
+
+        _pauseItem = new ToolStripMenuItem("Pause Rotation", null, (_, _) => executeCommand(AppCommand.TogglePause));
         menu.Items.Add(_pauseItem);
 
         menu.Items.Add(new ToolStripSeparator());
+        _contextMenuItem = new ToolStripMenuItem("Desktop Right-Click Menu", null, (_, _) => toggleContextMenu());
+        menu.Items.Add(_contextMenuItem);
         menu.Items.Add("Import Local Folder...", null, (_, _) => ImportLocalFolder());
         menu.Items.Add("Open Config File", null, (_, _) => OpenPath(_paths.ConfigFile));
         menu.Items.Add("Reload Config", null, (_, _) => reloadConfig());
@@ -49,13 +59,20 @@ public sealed class TrayIconHost : IDisposable
             Visible = true
         };
 
-        _notifyIcon.DoubleClick += (_, _) => _rotation.NextWallpaper(_getConfig(), isManual: true);
+        _notifyIcon.DoubleClick += (_, _) => executeCommand(AppCommand.Next);
+        RefreshState();
     }
 
-    private void TogglePause()
+    public void RefreshState()
     {
-        _rotation.IsPaused = !_rotation.IsPaused;
+        _pinItem.Checked = _rotation.IsCurrentPinned;
+        _pinItem.Text = _rotation.IsCurrentPinned ? "Unpin Current Wallpaper" : "Pin Current Wallpaper";
+        _pinItem.Enabled = _rotation.CurrentPins.Count > 0;
+
+        _pauseItem.Checked = _rotation.IsPaused;
         _pauseItem.Text = _rotation.IsPaused ? "Resume Rotation" : "Pause Rotation";
+
+        _contextMenuItem.Checked = ContextMenuRegistrar.IsInstalled();
     }
 
     private void ImportLocalFolder()

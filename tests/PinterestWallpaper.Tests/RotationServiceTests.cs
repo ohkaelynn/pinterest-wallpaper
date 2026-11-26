@@ -41,8 +41,16 @@ public sealed class RotationServiceTests : IDisposable
         state.Fullscreen = true;
         Assert.False(service.NextWallpaper(config, isManual: false));
 
-        // Skip & block removes current pin and advances
+        // Pinning current wallpaper blocks scheduled rotation until unpinned or manually swapped
         state.Fullscreen = false;
+        Assert.True(service.TogglePinCurrent());
+        Assert.True(service.IsCurrentPinned);
+        Assert.False(service.NextWallpaper(config, isManual: false));
+
+        Assert.True(service.NextWallpaper(config, isManual: true));
+        Assert.False(service.IsCurrentPinned);
+
+        // Skip & block removes current pin and advances
         var blockedId = service.CurrentPins.Single().PinId;
         Assert.True(service.SkipAndBlockCurrent(config));
         Assert.True(db.IsBlocked(blockedId));

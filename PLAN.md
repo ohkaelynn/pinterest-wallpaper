@@ -61,9 +61,10 @@
    - *Done when:* App rotates local test wallpapers reliably on a timer and via tray menu.
 
 2. **Phase 2 — Desktop Right-Click Menu**
-   - Add single-instance Named Pipe IPC so invoking `PinterestWallpaper.exe --next` (or `--prev`, `--open-pin`, `--skip`) tells the running app to swap immediately (<150ms).
+   - Add single-instance Named Pipe IPC so invoking `PinterestWallpaper.exe --next` (or `--prev`, `--open-pin`, `--skip`, `--toggle-pin`, `--toggle-pause`) tells the running app to act immediately (<150ms).
+   - Add **Pin Current Wallpaper** option to lock the current wallpaper against timed swaps until unpinned.
    - Add toggleable `HKCU` Registry installer/uninstaller for the desktop right-click submenu.
-   - *Done when:* Right-clicking the desktop swaps wallpapers instantly.
+   - *Done when:* Right-clicking the desktop swaps, pins, or skips wallpapers instantly.
 
 3. **Phase 3 — Personal Pinterest Sync (WebView2)**
    - Embed WebView2 for one-time interactive login (`pinterest.com/login`).
