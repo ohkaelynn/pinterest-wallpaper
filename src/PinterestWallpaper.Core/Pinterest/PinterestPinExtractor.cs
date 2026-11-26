@@ -158,17 +158,17 @@ public static class PinterestPinExtractor
         }
 
         var candidate = urlProp.GetString();
-        if (string.IsNullOrWhiteSpace(candidate) || !candidate.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        if (!PinterestUrlGuard.IsAllowedPinterestImageUrl(candidate))
         {
             return false;
         }
 
-        if (candidate.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+        if (candidate!.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
 
-        url = candidate;
+        url = candidate!;
         if (entry.TryGetProperty("width", out var wProp) && wProp.TryGetInt32(out var w))
         {
             width = w;

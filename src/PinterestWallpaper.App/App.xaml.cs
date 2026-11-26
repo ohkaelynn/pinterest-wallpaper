@@ -29,6 +29,7 @@ public partial class App : Application
     private CancellationTokenSource? _syncCts;
     private RotationService? _rotation;
     private TrayIconHost? _tray;
+    private SettingsWindow? _settingsWindow;
     private DispatcherTimer? _timer;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -55,7 +56,7 @@ public partial class App : Application
         _configStore = new ConfigStore(_paths.ConfigFile);
         _config = _configStore.LoadOrCreate();
 
-        SyncContextMenuRegistration(_config.Shell.DesktopContextMenu);
+        SyncShellIntegrations(_config.Shell);
 
         _db = new StateDatabase(_paths.DatabaseFile);
         _governor = new RateLimitGovernor(_db);
@@ -71,8 +72,10 @@ public partial class App : Application
             () => _config,
             _rotation,
             ExecuteCommand,
+            OpenSettings,
             OpenPinterestLogin,
             () => _ = RunSyncAsync(isManual: true),
+            () => _ = SignOutAsync(showNotification: true),
             ToggleContextMenu,
             ReloadConfig,
             Shutdown);
@@ -90,6 +93,45 @@ public partial class App : Application
         }
     }
 
+    private void OpenSettings()
+    {
+        if (_config is null || _db is null || _governor is null)
+        {
+            return;
+        }
+
+        if (_settingsWindow is not null && _settingsWindow.IsLoaded)
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        _settingsWindow = new SettingsWindow(
+            _config,
+            _db,
+            _governor,
+            SaveConfigFromUi,
+            OpenPinterestLogin,
+            () => _ = RunSyncAsync(isManual: true),
+            () => SignOutAsync(showNotification: false));
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Show();
+    }
+
+    private void SaveConfigFromUi(AppConfig updated)
+    {
+        if (_configStore is null)
+        {
+            return;
+        }
+
+        _configStore.Save(updated);
+        _config = _configStore.LoadOrCreate();
+        SyncShellIntegrations(_config.Shell);
+        _tray?.RefreshState();
+        ScheduleNextTick();
+    }
+
     private void OpenPinterestLogin()
     {
         if (_paths is null)
@@ -99,6 +141,24 @@ public partial class App : Application
 
         var loginWindow = new PinterestLoginWindow(_paths.WebView2Directory);
         loginWindow.Show();
+    }
+
+    private async Task<bool> SignOutAsync(bool showNotification)
+    {
+        if (_syncService is null || _syncCts is null)
+        {
+            return false;
+        }
+
+        var ok = await _syncService.TryClearSessionAsync(_syncCts.Token);
+        if (showNotification)
+        {
+            _tray?.ShowNotification(
+                "Pinterest Wallpaper",
+                ok ? "Signed out and cleared local Pinterest session." : "Could not clear session while a sync is running.");
+        }
+
+        return ok;
     }
 
     private async Task RunSyncAsync(bool isManual)
@@ -151,7 +211,7 @@ public partial class App : Application
                 _rotation.IsPaused = !_rotation.IsPaused;
                 break;
             case AppCommand.SaveToPinterest:
-                SaveCurrentToPinterest();
+                _ = SaveCurrentToPinterestAsync();
                 break;
             case AppCommand.OpenPin:
                 OpenCurrentPin();
@@ -161,17 +221,32 @@ public partial class App : Application
         _tray?.RefreshState();
     }
 
-    private void SaveCurrentToPinterest()
+    private async Task SaveCurrentToPinterestAsync()
     {
         var saved = _rotation?.MarkCurrentFavorite();
-        if (saved is null)
+        if (saved is null || _config is null)
         {
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(saved.PinUrl))
+        if (!PinterestUrlGuard.IsAllowedPinterestPageUrl(saved.PinUrl))
         {
-            Process.Start(new ProcessStartInfo(saved.PinUrl) { UseShellExecute = true });
+            _tray?.ShowNotification("Pinterest Wallpaper", "Marked local wallpaper as favorite.");
+            return;
+        }
+
+        if (!_config.Actions.BackgroundSaveEnabled || _syncService is null || _syncCts is null)
+        {
+            OpenAllowedPinterestUrl(saved.PinUrl);
+            return;
+        }
+
+        var result = await _syncService.TrySaveAndLikePinAsync(saved, _config.Actions, _syncCts.Token);
+        _tray?.ShowNotification("Pinterest Wallpaper", result.Message);
+
+        if (result.FallbackToBrowser)
+        {
+            OpenAllowedPinterestUrl(saved.PinUrl);
         }
     }
 
@@ -183,9 +258,9 @@ public partial class App : Application
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(current.PinUrl))
+        if (PinterestUrlGuard.IsAllowedPinterestPageUrl(current.PinUrl))
         {
-            Process.Start(new ProcessStartInfo(current.PinUrl) { UseShellExecute = true });
+            OpenAllowedPinterestUrl(current.PinUrl);
         }
         else if (File.Exists(current.LocalPath))
         {
@@ -193,6 +268,14 @@ public partial class App : Application
             {
                 UseShellExecute = true
             });
+        }
+    }
+
+    private static void OpenAllowedPinterestUrl(string url)
+    {
+        if (PinterestUrlGuard.IsAllowedPinterestPageUrl(url))
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
         }
     }
 
@@ -204,17 +287,17 @@ public partial class App : Application
         }
 
         var enable = !ContextMenuRegistrar.IsInstalled();
-        SyncContextMenuRegistration(enable);
         _config.Shell.DesktopContextMenu = enable;
+        SyncShellIntegrations(_config.Shell);
         _configStore.Save(_config);
         _tray?.RefreshState();
     }
 
-    private static void SyncContextMenuRegistration(bool enabled)
+    private static void SyncShellIntegrations(ShellConfig shell)
     {
         try
         {
-            if (enabled)
+            if (shell.DesktopContextMenu)
             {
                 ContextMenuRegistrar.Install();
             }
@@ -222,6 +305,8 @@ public partial class App : Application
             {
                 ContextMenuRegistrar.Uninstall();
             }
+
+            StartupRegistrar.SetEnabled(shell.StartWithWindows);
         }
         catch
         {
@@ -237,7 +322,6 @@ public partial class App : Application
             _tray?.RefreshState();
             ScheduleNextTick();
 
-            // Check in the background whether the local pool is low (governor enforces cooldowns).
             _ = RunSyncAsync(isManual: false);
         }
     }
@@ -262,7 +346,7 @@ public partial class App : Application
         }
 
         _config = _configStore.LoadOrCreate();
-        SyncContextMenuRegistration(_config.Shell.DesktopContextMenu);
+        SyncShellIntegrations(_config.Shell);
         _tray?.RefreshState();
         ScheduleNextTick();
     }

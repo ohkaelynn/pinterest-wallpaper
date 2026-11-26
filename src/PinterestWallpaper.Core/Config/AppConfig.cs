@@ -9,12 +9,21 @@ public sealed class AppConfig
     public SourcesConfig Sources { get; set; } = new();
     public FilterConfig Filters { get; set; } = new();
     public FetchingConfig Fetching { get; set; } = new();
+    public ActionsConfig Actions { get; set; } = new();
     public ShellConfig Shell { get; set; } = new();
+}
+
+public sealed class ActionsConfig
+{
+    public bool BackgroundSaveEnabled { get; set; } = true;
+    public string DefaultSaveBoardName { get; set; } = string.Empty;
+    public bool LikeWhenSaving { get; set; } = true;
 }
 
 public sealed class ShellConfig
 {
     public bool DesktopContextMenu { get; set; } = true;
+    public bool StartWithWindows { get; set; } = false;
 }
 
 public sealed class RotationConfig

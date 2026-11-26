@@ -14,6 +14,7 @@ using Application = System.Windows.Application;
 namespace PinterestWallpaper.App.Pinterest;
 
 public sealed record SyncResult(bool Ran, int PinsAdded, string Message);
+public sealed record PinActionResult(bool Success, bool FallbackToBrowser, string Message);
 
 public sealed class PinterestSyncService : IDisposable
 {
@@ -21,7 +22,8 @@ public sealed class PinterestSyncService : IDisposable
     private readonly StateDatabase _db;
     private readonly RateLimitGovernor _governor;
     private readonly SemaphoreSlim _syncLock = new(1, 1);
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(25) };
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private DateTimeOffset _lastWriteActionUtc = DateTimeOffset.MinValue;
 
     public PinterestSyncService(AppPaths paths, StateDatabase db, RateLimitGovernor governor)
     {
@@ -36,7 +38,7 @@ public sealed class PinterestSyncService : IDisposable
     {
         if (!await _syncLock.WaitAsync(0, ct))
         {
-            return new SyncResult(false, 0, "A sync is already running.");
+            return new SyncResult(false, 0, "A Pinterest sync or action is already running.");
         }
 
         try
@@ -84,6 +86,237 @@ public sealed class PinterestSyncService : IDisposable
         }
     }
 
+    public async Task<PinActionResult> TrySaveAndLikePinAsync(PinRecord pin, ActionsConfig actions, CancellationToken ct = default)
+    {
+        if (!PinterestUrlGuard.IsAllowedPinterestPageUrl(pin.PinUrl))
+        {
+            return new PinActionResult(false, false, "Marked favorite locally (not a Pinterest pin).");
+        }
+
+        var backoffUntil = _governor.GetBackoffUntilUtc();
+        if (backoffUntil is not null && DateTimeOffset.UtcNow < backoffUntil.Value)
+        {
+            return new PinActionResult(false, true, "Pinterest is in rate-limit backoff; opening pin in browser instead.");
+        }
+
+        if (!await _syncLock.WaitAsync(TimeSpan.FromSeconds(2), ct))
+        {
+            return new PinActionResult(false, false, "Pinterest is busy syncing; try again in a moment.");
+        }
+
+        try
+        {
+            // Short cooldown between write actions to stay natural.
+            var sinceLast = DateTimeOffset.UtcNow - _lastWriteActionUtc;
+            if (sinceLast < TimeSpan.FromSeconds(5))
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5) - sinceLast, ct);
+            }
+
+            var result = await ExecuteSaveAndLikeInWebViewAsync(pin.PinUrl, actions, ct);
+            _lastWriteActionUtc = DateTimeOffset.UtcNow;
+            return result;
+        }
+        finally
+        {
+            _syncLock.Release();
+        }
+    }
+
+    public async Task<bool> TryClearSessionAsync(CancellationToken ct = default)
+    {
+        if (!await _syncLock.WaitAsync(TimeSpan.FromSeconds(3), ct))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (Directory.Exists(_paths.WebView2Directory))
+            {
+                Directory.Delete(_paths.WebView2Directory, recursive: true);
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            _syncLock.Release();
+        }
+    }
+
+    private Task<PinActionResult> ExecuteSaveAndLikeInWebViewAsync(string pinUrl, ActionsConfig actions, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<PinActionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Application.Current.Dispatcher.InvokeAsync(async () =>
+        {
+            Window? hostWindow = null;
+            WebView2? webView = null;
+
+            try
+            {
+                var rateLimited = false;
+                webView = new WebView2();
+                hostWindow = CreateHiddenHostWindow(webView);
+                hostWindow.Show();
+
+                var env = await CoreWebView2Environment.CreateAsync(userDataFolder: _paths.WebView2Directory);
+                await webView.EnsureCoreWebView2Async(env);
+
+                webView.CoreWebView2.WebResourceResponseReceived += (_, args) =>
+                {
+                    if (PinterestUrlGuard.IsAllowedPinterestPageUrl(args.Request.Uri) &&
+                        args.Response.StatusCode is 429 or 403)
+                    {
+                        rateLimited = true;
+                    }
+                };
+
+                await NavigateAndWaitAsync(webView, pinUrl, ct);
+                await Task.Delay(TimeSpan.FromMilliseconds(2200), ct);
+
+                if (rateLimited)
+                {
+                    _governor.RecordRateLimitOrChallenge(DateTimeOffset.UtcNow, "rate_limited");
+                    tcs.TrySetResult(new PinActionResult(false, true, "Pinterest rate-limited the action; backing off."));
+                    return;
+                }
+
+                var currentUrl = webView.CoreWebView2.Source ?? string.Empty;
+                if (currentUrl.Contains("/login", StringComparison.OrdinalIgnoreCase))
+                {
+                    tcs.TrySetResult(new PinActionResult(false, true, "Pinterest session expired; sign in again."));
+                    return;
+                }
+
+                var liked = false;
+                if (actions.LikeWhenSaving)
+                {
+                    const string likeScript = """
+                        (() => {
+                            const btn = document.querySelector('[data-test-id="reactions-button"], button[aria-label*="React"], button[aria-label*="Like"]');
+                            if (!btn) return 'missing';
+                            const pressed = btn.getAttribute('aria-pressed');
+                            if (pressed === 'true') return 'already';
+                            btn.click();
+                            return 'clicked';
+                        })()
+                        """;
+                    var likeRaw = await webView.CoreWebView2.ExecuteScriptAsync(likeScript);
+                    var likeStatus = JsonSerializer.Deserialize<string>(likeRaw);
+                    liked = likeStatus is "clicked" or "already";
+                    if (likeStatus == "clicked")
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(1200), ct);
+                    }
+                }
+
+                var saved = false;
+                var boardName = actions.DefaultSaveBoardName?.Trim() ?? string.Empty;
+
+                if (string.IsNullOrEmpty(boardName))
+                {
+                    // Click Pinterest's default Save button (saves to My Saves / default board).
+                    const string saveDefaultScript = """
+                        (() => {
+                            const btn = document.querySelector('[data-test-id="PinBetterSaveButton"] button, [data-test-id="PinBetterSaveButton"], button[aria-label="Save"]');
+                            if (!btn) return 'missing';
+                            const txt = (btn.innerText || '').trim().toLowerCase();
+                            if (txt === 'saved') return 'already';
+                            btn.click();
+                            return 'clicked';
+                        })()
+                        """;
+                    var saveRaw = await webView.CoreWebView2.ExecuteScriptAsync(saveDefaultScript);
+                    var saveStatus = JsonSerializer.Deserialize<string>(saveRaw);
+                    saved = saveStatus is "clicked" or "already";
+                }
+                else
+                {
+                    // Open board picker, search for the user's configured board name, and click matching board.
+                    const string openDropdownScript = """
+                        (() => {
+                            const btn = document.querySelector('[data-test-id="board-dropdown-select-button"]');
+                            if (!btn) return false;
+                            btn.click();
+                            return true;
+                        })()
+                        """;
+                    var opened = await webView.CoreWebView2.ExecuteScriptAsync(openDropdownScript);
+                    if (opened == "true")
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(900), ct);
+                        var escapedBoard = JsonSerializer.Serialize(boardName);
+                        var selectBoardScript = $$"""
+                            (() => {
+                                const target = {{escapedBoard}}.toLowerCase();
+                                const input = document.querySelector('input[aria-label="Search"], input[placeholder="Search"]');
+                                if (input) {
+                                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                    setter.call(input, {{escapedBoard}});
+                                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                                }
+                                return true;
+                            })()
+                            """;
+                        await webView.CoreWebView2.ExecuteScriptAsync(selectBoardScript);
+                        await Task.Delay(TimeSpan.FromMilliseconds(900), ct);
+
+                        var clickRowScript = $$"""
+                            (() => {
+                                const target = {{escapedBoard}}.toLowerCase();
+                                const items = Array.from(document.querySelectorAll('[data-test-id^="board-row-"], [role="button"], button'));
+                                for (const el of items) {
+                                    const text = (el.innerText || '').trim().toLowerCase();
+                                    if (text === target || text.startsWith(target + '\n')) {
+                                        el.click();
+                                        return 'clicked';
+                                    }
+                                }
+                                return 'missing';
+                            })()
+                            """;
+                        var rowRaw = await webView.CoreWebView2.ExecuteScriptAsync(clickRowScript);
+                        saved = JsonSerializer.Deserialize<string>(rowRaw) == "clicked";
+                    }
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(1500), ct);
+
+                if (saved || liked)
+                {
+                    var what = (saved, liked) switch
+                    {
+                        (true, true) => "Saved & liked on Pinterest.",
+                        (true, false) => "Saved to Pinterest.",
+                        _ => "Liked on Pinterest."
+                    };
+                    tcs.TrySetResult(new PinActionResult(true, false, what));
+                }
+                else
+                {
+                    tcs.TrySetResult(new PinActionResult(false, true, "Could not locate Pinterest Save button; opening in browser."));
+                }
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetResult(new PinActionResult(false, true, $"Background save failed ({ex.Message}); opening in browser."));
+            }
+            finally
+            {
+                webView?.Dispose();
+                hostWindow?.Close();
+            }
+        });
+
+        return tcs.Task;
+    }
+
     private static List<(string SourceType, string SourceValue, string Url)> BuildSourceTargets(SourcesConfig sources)
     {
         var list = new List<(string, string, string)>();
@@ -91,7 +324,7 @@ public sealed class PinterestSyncService : IDisposable
         foreach (var board in sources.Boards.Where(b => b.Enabled && !string.IsNullOrWhiteSpace(b.Url)))
         {
             var url = board.Url.Trim();
-            if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            if (PinterestUrlGuard.IsAllowedPinterestPageUrl(url))
             {
                 list.Add(("board", url, url));
             }
@@ -111,6 +344,19 @@ public sealed class PinterestSyncService : IDisposable
 
         return list;
     }
+
+    private static Window CreateHiddenHostWindow(WebView2 webView) => new()
+    {
+        Width = 1280,
+        Height = 900,
+        Left = -20000,
+        Top = -20000,
+        ShowInTaskbar = false,
+        ShowActivated = false,
+        WindowStyle = WindowStyle.None,
+        Opacity = 0,
+        Content = webView
+    };
 
     private sealed record CollectResult(
         List<(string SourceType, string SourceValue, ExtractedPin Pin)> Candidates,
@@ -140,19 +386,7 @@ public sealed class PinterestSyncService : IDisposable
                 var currentSourceValue = string.Empty;
 
                 webView = new WebView2();
-                hostWindow = new Window
-                {
-                    Width = 1280,
-                    Height = 900,
-                    Left = -20000,
-                    Top = -20000,
-                    ShowInTaskbar = false,
-                    ShowActivated = false,
-                    WindowStyle = WindowStyle.None,
-                    Opacity = 0,
-                    Content = webView
-                };
-
+                hostWindow = CreateHiddenHostWindow(webView);
                 hostWindow.Show();
 
                 var env = await CoreWebView2Environment.CreateAsync(userDataFolder: _paths.WebView2Directory);
@@ -163,7 +397,7 @@ public sealed class PinterestSyncService : IDisposable
                     try
                     {
                         var url = args.Request.Uri;
-                        if (!url.Contains("pinterest.com", StringComparison.OrdinalIgnoreCase))
+                        if (!PinterestUrlGuard.IsAllowedPinterestPageUrl(url))
                         {
                             return;
                         }
@@ -229,7 +463,6 @@ public sealed class PinterestSyncService : IDisposable
                         break;
                     }
 
-                    // Extract any SSR-embedded initial JSON payload on the page.
                     await ExtractEmbeddedPageJsonAsync(webView, config.Filters, sourceType, sourceValue, seenIds, candidates);
 
                     for (var step = 0; step < maxScrolls; step++)
@@ -340,6 +573,11 @@ public sealed class PinterestSyncService : IDisposable
                 break;
             }
 
+            if (!PinterestUrlGuard.IsAllowedPinterestImageUrl(pin.ImageUrl))
+            {
+                continue;
+            }
+
             if (_db.IsBlocked(pin.PinId) || _db.GetPinById(pin.PinId) is not null)
             {
                 continue;
@@ -362,9 +600,36 @@ public sealed class PinterestSyncService : IDisposable
                     continue;
                 }
 
+                if (response.Content.Headers.ContentLength is long contentLen &&
+                    contentLen > PinterestUrlGuard.MaxImageDownloadBytes)
+                {
+                    continue;
+                }
+
+                var exceededLimit = false;
+                await using (var remoteStream = await response.Content.ReadAsStreamAsync(ct))
                 await using (var fs = File.Create(tempPath))
                 {
-                    await response.Content.CopyToAsync(fs, ct);
+                    var buffer = new byte[81920];
+                    long totalRead = 0;
+                    int read;
+                    while ((read = await remoteStream.ReadAsync(buffer, ct)) > 0)
+                    {
+                        totalRead += read;
+                        if (totalRead > PinterestUrlGuard.MaxImageDownloadBytes)
+                        {
+                            exceededLimit = true;
+                            break;
+                        }
+
+                        await fs.WriteAsync(buffer.AsMemory(0, read), ct);
+                    }
+                }
+
+                if (exceededLimit)
+                {
+                    File.Delete(tempPath);
+                    continue;
                 }
 
                 var check = ImageFilter.ValidateFile(tempPath, config.Filters, existingHashes);
@@ -391,7 +656,6 @@ public sealed class PinterestSyncService : IDisposable
                 existingHashes.Add(check.PerceptualHash);
                 added++;
 
-                // Sequential human-paced download delay.
                 await Task.Delay(_governor.GetImageDownloadDelay(), ct);
             }
             catch

@@ -21,8 +21,10 @@ public sealed class TrayIconHost : IDisposable
         Func<AppConfig> getConfig,
         RotationService rotation,
         Action<AppCommand> executeCommand,
+        Action openSettings,
         Action openPinterestLogin,
         Action syncNow,
+        Action signOut,
         Action toggleContextMenu,
         Action reloadConfig,
         Action exitApp)
@@ -37,15 +39,17 @@ public sealed class TrayIconHost : IDisposable
 
         _savePinItem = new ToolStripMenuItem("Save / Pin to Pinterest", null, (_, _) => executeCommand(AppCommand.SaveToPinterest));
         menu.Items.Add(_savePinItem);
-        menu.Items.Add("Open Current Pin", null, (_, _) => executeCommand(AppCommand.OpenPin));
+        menu.Items.Add("Open Current Pin in Browser", null, (_, _) => executeCommand(AppCommand.OpenPin));
         menu.Items.Add("Skip & Hide Current", null, (_, _) => executeCommand(AppCommand.SkipAndHide));
 
         _pauseItem = new ToolStripMenuItem("Pause Rotation", null, (_, _) => executeCommand(AppCommand.TogglePause));
         menu.Items.Add(_pauseItem);
 
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Settings...", null, (_, _) => openSettings());
         menu.Items.Add("Sign in to Pinterest...", null, (_, _) => openPinterestLogin());
         menu.Items.Add("Sync Now (if cooldown allows)", null, (_, _) => syncNow());
+        menu.Items.Add("Sign Out & Clear Session", null, (_, _) => signOut());
 
         menu.Items.Add(new ToolStripSeparator());
         _contextMenuItem = new ToolStripMenuItem("Desktop Right-Click Menu", null, (_, _) => toggleContextMenu());
