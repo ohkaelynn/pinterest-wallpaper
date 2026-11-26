@@ -173,6 +173,11 @@ public partial class SettingsWindow : Window
         _updatingResolutionUi = false;
     }
 
+    public void SelectAccountTab()
+    {
+        NavAccount.IsChecked = true;
+    }
+
     private void OnNavChanged(object sender, RoutedEventArgs e)
     {
         if (PageSources is null)

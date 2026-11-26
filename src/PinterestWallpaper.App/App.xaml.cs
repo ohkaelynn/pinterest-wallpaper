@@ -87,11 +87,18 @@ public partial class App : Application
         {
             ExecuteCommand(startupCommand);
         }
+        else if (!Directory.Exists(_paths.WebView2Directory) && _db.GetAvailablePins().Count == 0)
+        {
+            // First launch: open Settings directly on Account & Status so the user can sign in right away.
+            OpenSettings(selectAccountTab: true);
+        }
 
         MemoryTrimmer.TrimIdleMemory();
     }
 
-    private void OpenSettings()
+    private void OpenSettings() => OpenSettings(selectAccountTab: false);
+
+    private void OpenSettings(bool selectAccountTab)
     {
         if (_config is null || _db is null || _governor is null)
         {
@@ -100,6 +107,11 @@ public partial class App : Application
 
         if (_settingsWindow is not null && _settingsWindow.IsLoaded)
         {
+            if (selectAccountTab)
+            {
+                _settingsWindow.SelectAccountTab();
+            }
+
             _settingsWindow.Activate();
             return;
         }
@@ -119,6 +131,12 @@ public partial class App : Application
             _settingsWindow = null;
             MemoryTrimmer.TrimIdleMemory();
         };
+
+        if (selectAccountTab)
+        {
+            _settingsWindow.SelectAccountTab();
+        }
+
         _settingsWindow.Show();
     }
 

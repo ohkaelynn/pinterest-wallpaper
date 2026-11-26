@@ -23,6 +23,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=force
+UsePreviousAppDir=yes
 OutputDir=..\dist
 OutputBaseFilename=PinterestWallpaper-v{#AppVersion}-win-x64-setup
 
@@ -47,3 +48,25 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\PinterestWallpaper.exe"; Description: "Launch Pinterest Wallpaper Swapper"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// Cleanly close any running headless tray instance before upgrading or uninstalling
+// so files in {app} are never locked during an in-place update.
+procedure StopRunningApp();
+var
+  ResultCode: Integer;
+begin
+  Exec('taskkill.exe', '/F /IM PinterestWallpaper.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopRunningApp();
+  Result := '';
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  StopRunningApp();
+  Result := True;
+end;
