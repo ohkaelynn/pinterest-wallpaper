@@ -9,6 +9,7 @@ public sealed class CommandAndIpcTests
     [Theory]
     [InlineData("--next", AppCommand.Next)]
     [InlineData("--prev", AppCommand.Previous)]
+    [InlineData("--like-pin", AppCommand.LikeOnPinterest)]
     [InlineData("--save-pin", AppCommand.SaveToPinterest)]
     [InlineData("--open-pin", AppCommand.OpenPin)]
     [InlineData("--skip", AppCommand.SkipAndHide)]

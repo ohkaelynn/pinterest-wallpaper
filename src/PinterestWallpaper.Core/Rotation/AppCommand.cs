@@ -5,6 +5,7 @@ public enum AppCommand
     None,
     Next,
     Previous,
+    LikeOnPinterest,
     SaveToPinterest,
     OpenPin,
     SkipAndHide,
@@ -27,6 +28,7 @@ public static class CommandParser
     {
         "--next" or "next" => AppCommand.Next,
         "--prev" or "--previous" or "prev" => AppCommand.Previous,
+        "--like-pin" or "like-pin" => AppCommand.LikeOnPinterest,
         "--save-pin" or "save-pin" => AppCommand.SaveToPinterest,
         "--open-pin" or "open-pin" => AppCommand.OpenPin,
         "--skip" or "skip" => AppCommand.SkipAndHide,
@@ -38,6 +40,7 @@ public static class CommandParser
     {
         AppCommand.Next => "--next",
         AppCommand.Previous => "--prev",
+        AppCommand.LikeOnPinterest => "--like-pin",
         AppCommand.SaveToPinterest => "--save-pin",
         AppCommand.OpenPin => "--open-pin",
         AppCommand.SkipAndHide => "--skip",

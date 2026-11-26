@@ -43,6 +43,24 @@ public partial class SettingsWindow : Window
         RefreshStatus();
     }
 
+    private void OnNavChanged(object sender, RoutedEventArgs e)
+    {
+        if (PageSources is null)
+        {
+            return;
+        }
+
+        PageSources.Visibility = NavSources.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PageRotation.Visibility = NavRotation.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PageFilters.Visibility = NavFilters.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PageAccount.Visibility = NavAccount.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+
+        if (NavAccount.IsChecked == true)
+        {
+            RefreshStatus();
+        }
+    }
+
     private void LoadIntoForm()
     {
         BoardsBox.Text = string.Join(Environment.NewLine, _config.Sources.Boards.Where(b => b.Enabled).Select(b => b.Url));
@@ -50,7 +68,6 @@ public partial class SettingsWindow : Window
         HomeFeedCheck.IsChecked = _config.Sources.HomeFeed.Enabled;
 
         BackgroundSaveCheck.IsChecked = _config.Actions.BackgroundSaveEnabled;
-        LikeWhenSavingCheck.IsChecked = _config.Actions.LikeWhenSaving;
         DefaultBoardBox.Text = _config.Actions.DefaultSaveBoardName;
 
         RotationEnabledCheck.IsChecked = _config.Rotation.Enabled;
@@ -85,12 +102,13 @@ public partial class SettingsWindow : Window
         var syncsToday = _db.GetSyncCountSince(DateTimeOffset.UtcNow.AddHours(-24));
         var decision = _governor.CanSync(_config.Fetching, DateTimeOffset.UtcNow);
 
+        StatTotalText.Text = total.ToString(CultureInfo.InvariantCulture);
+        StatUnseenText.Text = unseen.ToString(CultureInfo.InvariantCulture);
+        StatSyncsText.Text = $"{syncsToday} / {_config.Fetching.MaxSyncsPerDay}";
+        SidebarStatusText.Text = $"{unseen} unseen ready · {total} cached";
+
         var lastSyncText = lastSync is null ? "Never" : lastSync.Value.ToLocalTime().ToString("g");
-        StatusText.Text =
-            $"Cached wallpapers: {total} total ({unseen} unseen)\n" +
-            $"Last sync: {lastSyncText}\n" +
-            $"Syncs in last 24h: {syncsToday} / {_config.Fetching.MaxSyncsPerDay}\n" +
-            $"Next sync status: {decision.Reason}";
+        StatusText.Text = $"Last sync: {lastSyncText}\nNext sync: {decision.Reason}";
     }
 
     private void OnSaveClick(object sender, RoutedEventArgs e)
@@ -124,7 +142,6 @@ public partial class SettingsWindow : Window
         _config.Sources.HomeFeed.Enabled = HomeFeedCheck.IsChecked == true;
 
         _config.Actions.BackgroundSaveEnabled = BackgroundSaveCheck.IsChecked == true;
-        _config.Actions.LikeWhenSaving = LikeWhenSavingCheck.IsChecked == true;
         _config.Actions.DefaultSaveBoardName = DefaultBoardBox.Text.Trim();
 
         _config.Rotation.Enabled = RotationEnabledCheck.IsChecked == true;

@@ -86,7 +86,17 @@ public sealed class PinterestSyncService : IDisposable
         }
     }
 
-    public async Task<PinActionResult> TrySaveAndLikePinAsync(PinRecord pin, ActionsConfig actions, CancellationToken ct = default)
+    public Task<PinActionResult> TryLikePinAsync(PinRecord pin, CancellationToken ct = default) =>
+        RunPinWriteActionAsync(pin, likeOnly: true, boardName: string.Empty, ct);
+
+    public Task<PinActionResult> TrySavePinAsync(PinRecord pin, ActionsConfig actions, CancellationToken ct = default) =>
+        RunPinWriteActionAsync(pin, likeOnly: false, boardName: actions.DefaultSaveBoardName?.Trim() ?? string.Empty, ct);
+
+    private async Task<PinActionResult> RunPinWriteActionAsync(
+        PinRecord pin,
+        bool likeOnly,
+        string boardName,
+        CancellationToken ct)
     {
         if (!PinterestUrlGuard.IsAllowedPinterestPageUrl(pin.PinUrl))
         {
@@ -106,14 +116,13 @@ public sealed class PinterestSyncService : IDisposable
 
         try
         {
-            // Short cooldown between write actions to stay natural.
             var sinceLast = DateTimeOffset.UtcNow - _lastWriteActionUtc;
             if (sinceLast < TimeSpan.FromSeconds(5))
             {
                 await Task.Delay(TimeSpan.FromSeconds(5) - sinceLast, ct);
             }
 
-            var result = await ExecuteSaveAndLikeInWebViewAsync(pin.PinUrl, actions, ct);
+            var result = await ExecutePinActionInWebViewAsync(pin.PinUrl, likeOnly, boardName, ct);
             _lastWriteActionUtc = DateTimeOffset.UtcNow;
             return result;
         }
@@ -149,7 +158,11 @@ public sealed class PinterestSyncService : IDisposable
         }
     }
 
-    private Task<PinActionResult> ExecuteSaveAndLikeInWebViewAsync(string pinUrl, ActionsConfig actions, CancellationToken ct)
+    private Task<PinActionResult> ExecutePinActionInWebViewAsync(
+        string pinUrl,
+        bool likeOnly,
+        string boardName,
+        CancellationToken ct)
     {
         var tcs = new TaskCompletionSource<PinActionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -161,6 +174,8 @@ public sealed class PinterestSyncService : IDisposable
             try
             {
                 var rateLimited = false;
+                var repinConfirmedByNetwork = false;
+
                 webView = new WebView2();
                 hostWindow = CreateHiddenHostWindow(webView);
                 hostWindow.Show();
@@ -170,10 +185,22 @@ public sealed class PinterestSyncService : IDisposable
 
                 webView.CoreWebView2.WebResourceResponseReceived += (_, args) =>
                 {
-                    if (PinterestUrlGuard.IsAllowedPinterestPageUrl(args.Request.Uri) &&
-                        args.Response.StatusCode is 429 or 403)
+                    if (!PinterestUrlGuard.IsAllowedPinterestPageUrl(args.Request.Uri))
+                    {
+                        return;
+                    }
+
+                    if (args.Response.StatusCode is 429 or 403)
                     {
                         rateLimited = true;
+                        return;
+                    }
+
+                    if (args.Response.StatusCode == 200 &&
+                        (args.Request.Uri.Contains("RepinResource/create", StringComparison.OrdinalIgnoreCase) ||
+                         args.Request.Uri.Contains("PinSave", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        repinConfirmedByNetwork = true;
                     }
                 };
 
@@ -194,8 +221,7 @@ public sealed class PinterestSyncService : IDisposable
                     return;
                 }
 
-                var liked = false;
-                if (actions.LikeWhenSaving)
+                if (likeOnly)
                 {
                     const string likeScript = """
                         (() => {
@@ -209,22 +235,36 @@ public sealed class PinterestSyncService : IDisposable
                         """;
                     var likeRaw = await webView.CoreWebView2.ExecuteScriptAsync(likeScript);
                     var likeStatus = JsonSerializer.Deserialize<string>(likeRaw);
-                    liked = likeStatus is "clicked" or "already";
-                    if (likeStatus == "clicked")
+                    await Task.Delay(TimeSpan.FromMilliseconds(1200), ct);
+
+                    var msg = likeStatus switch
                     {
-                        await Task.Delay(TimeSpan.FromMilliseconds(1200), ct);
-                    }
+                        "clicked" => "Liked wallpaper on Pinterest.",
+                        "already" => "Already liked on Pinterest.",
+                        _ => "Could not locate Like button; opening pin in browser."
+                    };
+                    tcs.TrySetResult(new PinActionResult(likeStatus is "clicked" or "already", likeStatus == "missing", msg));
+                    return;
                 }
 
-                var saved = false;
-                var boardName = actions.DefaultSaveBoardName?.Trim() ?? string.Empty;
+                // Save to Pinterest (either default My Saves or a specific board by name).
+                var alreadySaved = false;
+                var clickedSave = false;
 
                 if (string.IsNullOrEmpty(boardName))
                 {
-                    // Click Pinterest's default Save button (saves to My Saves / default board).
                     const string saveDefaultScript = """
                         (() => {
-                            const btn = document.querySelector('[data-test-id="PinBetterSaveButton"] button, [data-test-id="PinBetterSaveButton"], button[aria-label="Save"]');
+                            const candidates = [
+                                ...document.querySelectorAll('[data-test-id="PinBetterSaveButton"] button'),
+                                ...document.querySelectorAll('[data-test-id="PinBetterSaveButton"]'),
+                                ...document.querySelectorAll('button[aria-label="Save"]'),
+                                ...document.querySelectorAll('button')
+                            ];
+                            const btn = candidates.find(el => {
+                                const t = (el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
+                                return t === 'save' || t === 'saved';
+                            });
                             if (!btn) return 'missing';
                             const txt = (btn.innerText || '').trim().toLowerCase();
                             if (txt === 'saved') return 'already';
@@ -234,14 +274,14 @@ public sealed class PinterestSyncService : IDisposable
                         """;
                     var saveRaw = await webView.CoreWebView2.ExecuteScriptAsync(saveDefaultScript);
                     var saveStatus = JsonSerializer.Deserialize<string>(saveRaw);
-                    saved = saveStatus is "clicked" or "already";
+                    alreadySaved = saveStatus == "already";
+                    clickedSave = saveStatus == "clicked";
                 }
                 else
                 {
-                    // Open board picker, search for the user's configured board name, and click matching board.
                     const string openDropdownScript = """
                         (() => {
-                            const btn = document.querySelector('[data-test-id="board-dropdown-select-button"]');
+                            const btn = document.querySelector('[data-test-id="board-dropdown-select-button"], button[aria-label*="Select a board"], button[aria-label*="board"]');
                             if (!btn) return false;
                             btn.click();
                             return true;
@@ -250,11 +290,10 @@ public sealed class PinterestSyncService : IDisposable
                     var opened = await webView.CoreWebView2.ExecuteScriptAsync(openDropdownScript);
                     if (opened == "true")
                     {
-                        await Task.Delay(TimeSpan.FromMilliseconds(900), ct);
+                        await Task.Delay(TimeSpan.FromMilliseconds(1000), ct);
                         var escapedBoard = JsonSerializer.Serialize(boardName);
-                        var selectBoardScript = $$"""
+                        var searchBoardScript = $$"""
                             (() => {
-                                const target = {{escapedBoard}}.toLowerCase();
                                 const input = document.querySelector('input[aria-label="Search"], input[placeholder="Search"]');
                                 if (input) {
                                     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -264,17 +303,18 @@ public sealed class PinterestSyncService : IDisposable
                                 return true;
                             })()
                             """;
-                        await webView.CoreWebView2.ExecuteScriptAsync(selectBoardScript);
-                        await Task.Delay(TimeSpan.FromMilliseconds(900), ct);
+                        await webView.CoreWebView2.ExecuteScriptAsync(searchBoardScript);
+                        await Task.Delay(TimeSpan.FromMilliseconds(1000), ct);
 
                         var clickRowScript = $$"""
                             (() => {
                                 const target = {{escapedBoard}}.toLowerCase();
-                                const items = Array.from(document.querySelectorAll('[data-test-id^="board-row-"], [role="button"], button'));
-                                for (const el of items) {
-                                    const text = (el.innerText || '').trim().toLowerCase();
-                                    if (text === target || text.startsWith(target + '\n')) {
-                                        el.click();
+                                const rows = Array.from(document.querySelectorAll('[data-test-id^="board-row-"], [role="listitem"], [role="button"]'));
+                                for (const row of rows) {
+                                    const text = (row.innerText || '').trim().toLowerCase();
+                                    if (text === target || text.startsWith(target + '\n') || text.includes('\n' + target)) {
+                                        const innerSave = row.querySelector('button');
+                                        (innerSave || row).click();
                                         return 'clicked';
                                     }
                                 }
@@ -282,30 +322,38 @@ public sealed class PinterestSyncService : IDisposable
                             })()
                             """;
                         var rowRaw = await webView.CoreWebView2.ExecuteScriptAsync(clickRowScript);
-                        saved = JsonSerializer.Deserialize<string>(rowRaw) == "clicked";
+                        clickedSave = JsonSerializer.Deserialize<string>(rowRaw) == "clicked";
                     }
                 }
 
-                await Task.Delay(TimeSpan.FromMilliseconds(1500), ct);
+                await Task.Delay(TimeSpan.FromMilliseconds(2000), ct);
 
-                if (saved || liked)
+                // Verify save state either via network RepinResource 200 or DOM showing "Saved".
+                const string verifySavedScript = """
+                    (() => {
+                        const btns = Array.from(document.querySelectorAll('[data-test-id="PinBetterSaveButton"], [data-test-id="PinBetterSaveButton"] button, button'));
+                        return btns.some(b => (b.innerText || '').trim().toLowerCase() === 'saved');
+                    })()
+                    """;
+                var domSaysSaved = await webView.CoreWebView2.ExecuteScriptAsync(verifySavedScript) == "true";
+
+                var dest = string.IsNullOrEmpty(boardName) ? "My Saves" : $"board '{boardName}'";
+                if (alreadySaved)
                 {
-                    var what = (saved, liked) switch
-                    {
-                        (true, true) => "Saved & liked on Pinterest.",
-                        (true, false) => "Saved to Pinterest.",
-                        _ => "Liked on Pinterest."
-                    };
-                    tcs.TrySetResult(new PinActionResult(true, false, what));
+                    tcs.TrySetResult(new PinActionResult(true, false, $"Already saved on Pinterest ({dest})."));
+                }
+                else if (repinConfirmedByNetwork || (clickedSave && domSaysSaved))
+                {
+                    tcs.TrySetResult(new PinActionResult(true, false, $"Saved to Pinterest ({dest})."));
                 }
                 else
                 {
-                    tcs.TrySetResult(new PinActionResult(false, true, "Could not locate Pinterest Save button; opening in browser."));
+                    tcs.TrySetResult(new PinActionResult(false, true, $"Could not confirm save to {dest}; opening pin in browser."));
                 }
             }
             catch (Exception ex)
             {
-                tcs.TrySetResult(new PinActionResult(false, true, $"Background save failed ({ex.Message}); opening in browser."));
+                tcs.TrySetResult(new PinActionResult(false, true, $"Background action failed ({ex.Message}); opening in browser."));
             }
             finally
             {

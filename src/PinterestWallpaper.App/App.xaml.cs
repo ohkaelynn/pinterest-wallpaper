@@ -210,6 +210,9 @@ public partial class App : Application
             case AppCommand.TogglePause:
                 _rotation.IsPaused = !_rotation.IsPaused;
                 break;
+            case AppCommand.LikeOnPinterest:
+                _ = LikeCurrentOnPinterestAsync();
+                break;
             case AppCommand.SaveToPinterest:
                 _ = SaveCurrentToPinterestAsync();
                 break;
@@ -219,6 +222,35 @@ public partial class App : Application
         }
 
         _tray?.RefreshState();
+    }
+
+    private async Task LikeCurrentOnPinterestAsync()
+    {
+        var saved = _rotation?.MarkCurrentFavorite();
+        if (saved is null || _config is null)
+        {
+            return;
+        }
+
+        if (!PinterestUrlGuard.IsAllowedPinterestPageUrl(saved.PinUrl))
+        {
+            _tray?.ShowNotification("Pinterest Wallpaper", "Marked local wallpaper as favorite.");
+            return;
+        }
+
+        if (!_config.Actions.BackgroundSaveEnabled || _syncService is null || _syncCts is null)
+        {
+            OpenAllowedPinterestUrl(saved.PinUrl);
+            return;
+        }
+
+        var result = await _syncService.TryLikePinAsync(saved, _syncCts.Token);
+        _tray?.ShowNotification("Pinterest Wallpaper", result.Message);
+
+        if (result.FallbackToBrowser)
+        {
+            OpenAllowedPinterestUrl(saved.PinUrl);
+        }
     }
 
     private async Task SaveCurrentToPinterestAsync()
@@ -241,7 +273,7 @@ public partial class App : Application
             return;
         }
 
-        var result = await _syncService.TrySaveAndLikePinAsync(saved, _config.Actions, _syncCts.Token);
+        var result = await _syncService.TrySavePinAsync(saved, _config.Actions, _syncCts.Token);
         _tray?.ShowNotification("Pinterest Wallpaper", result.Message);
 
         if (result.FallbackToBrowser)
