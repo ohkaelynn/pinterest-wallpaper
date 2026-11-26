@@ -104,7 +104,7 @@ public sealed class FetchingConfig
     public int LowWaterMark { get; set; } = 15;
     public int TargetPoolSize { get; set; } = 50;
     public int MaxCacheMb { get; set; } = 500;
-    public int MinSyncCooldownMinutes { get; set; } = 240;
-    public int MaxSyncsPerDay { get; set; } = 4;
-    public int MaxScrollStepsPerSource { get; set; } = 3;
+    public int MinSyncCooldownMinutes { get; set; } = 60;
+    public int MaxSyncsPerDay { get; set; } = 12;
+    public int MaxScrollStepsPerSource { get; set; } = 4;
 }

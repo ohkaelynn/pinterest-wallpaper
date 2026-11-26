@@ -489,7 +489,7 @@ public sealed class PinterestSyncService : IDisposable
                     }
                 };
 
-                var maxScrolls = Math.Clamp(config.Fetching.MaxScrollStepsPerSource, 1, 5);
+                var maxScrolls = Math.Clamp(config.Fetching.MaxScrollStepsPerSource, 1, 8);
 
                 foreach (var (sourceType, sourceValue, url) in targets)
                 {

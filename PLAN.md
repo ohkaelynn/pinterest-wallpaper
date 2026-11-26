@@ -45,9 +45,9 @@
     "lowWaterMark": 15,
     "targetPoolSize": 50,
     "maxCacheMb": 500,
-    "minSyncCooldownMinutes": 240,
-    "maxSyncsPerDay": 4,
-    "maxScrollStepsPerSource": 3
+    "minSyncCooldownMinutes": 60,
+    "maxSyncsPerDay": 12,
+    "maxScrollStepsPerSource": 4
   },
   "actions": {
     "defaultSaveBoardName": "",

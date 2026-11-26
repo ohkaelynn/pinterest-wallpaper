@@ -73,11 +73,7 @@ public partial class App : Application
             _rotation,
             ExecuteCommand,
             OpenSettings,
-            OpenPinterestLogin,
             () => _ = RunSyncAsync(isManual: true),
-            () => _ = SignOutAsync(showNotification: true),
-            ToggleContextMenu,
-            ReloadConfig,
             Shutdown);
 
         _ipcServer = new NamedPipeCommandServer(cmd => Dispatcher.BeginInvoke(() => ExecuteCommand(cmd)));

@@ -12,10 +12,10 @@ public sealed class RateLimitGovernor
 
     private static readonly TimeSpan[] BackoffSchedule =
     [
-        TimeSpan.FromHours(1),
-        TimeSpan.FromHours(4),
-        TimeSpan.FromHours(12),
-        TimeSpan.FromHours(24)
+        TimeSpan.FromMinutes(30),
+        TimeSpan.FromHours(2),
+        TimeSpan.FromHours(6),
+        TimeSpan.FromHours(12)
     ];
 
     private readonly StateDatabase _db;
@@ -36,7 +36,7 @@ public sealed class RateLimitGovernor
             return new SyncDecision(false, $"In rate-limit backoff for another {Math.Ceiling(remaining.TotalMinutes)} min.");
         }
 
-        var cooldownMinutes = Math.Max(config.MinSyncCooldownMinutes, 60);
+        var cooldownMinutes = Math.Max(config.MinSyncCooldownMinutes, 15);
         var lastSync = _db.GetLastSyncTimeUtc();
         if (lastSync is not null)
         {
@@ -48,7 +48,7 @@ public sealed class RateLimitGovernor
             }
         }
 
-        var maxPerDay = Math.Clamp(config.MaxSyncsPerDay, 1, 12);
+        var maxPerDay = Math.Clamp(config.MaxSyncsPerDay, 1, 24);
         var syncsLast24h = _db.GetSyncCountSince(nowUtc.AddHours(-24));
         if (syncsLast24h >= maxPerDay)
         {
@@ -70,10 +70,10 @@ public sealed class RateLimitGovernor
     }
 
     public TimeSpan GetHumanStepDelay() =>
-        TimeSpan.FromMilliseconds(_random.Next(2500, 6500));
+        TimeSpan.FromMilliseconds(_random.Next(1500, 3500));
 
     public TimeSpan GetImageDownloadDelay() =>
-        TimeSpan.FromMilliseconds(_random.Next(1200, 2200));
+        TimeSpan.FromMilliseconds(_random.Next(600, 1200));
 
     public void RecordSuccess(int pinsAdded, DateTimeOffset nowUtc)
     {

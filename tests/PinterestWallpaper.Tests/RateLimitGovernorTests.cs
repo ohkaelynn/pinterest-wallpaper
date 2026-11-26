@@ -38,14 +38,14 @@ public sealed class RateLimitGovernorTests : IDisposable
         Assert.False(dailyBlocked.Allowed);
         Assert.Contains("Daily sync budget", dailyBlocked.Reason);
 
-        // Next day: simulate rate limit -> 1h backoff, then 4h backoff
+        // Next day: simulate rate limit -> 30m backoff, then 2h backoff
         var day2 = t0.AddHours(29);
         var b1 = gov.RecordRateLimitOrChallenge(day2);
-        Assert.Equal(TimeSpan.FromHours(1), b1);
-        Assert.False(gov.CanSync(cfg, day2.AddMinutes(30)).Allowed);
+        Assert.Equal(TimeSpan.FromMinutes(30), b1);
+        Assert.False(gov.CanSync(cfg, day2.AddMinutes(15)).Allowed);
 
-        var b2 = gov.RecordRateLimitOrChallenge(day2.AddHours(1));
-        Assert.Equal(TimeSpan.FromHours(4), b2);
+        var b2 = gov.RecordRateLimitOrChallenge(day2.AddMinutes(30));
+        Assert.Equal(TimeSpan.FromHours(2), b2);
         Assert.Equal(2, gov.GetConsecutiveFailures());
     }
 

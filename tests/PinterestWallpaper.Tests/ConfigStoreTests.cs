@@ -16,15 +16,15 @@ public sealed class ConfigStoreTests : IDisposable
         var created = store.LoadOrCreate();
         Assert.True(File.Exists(path));
         Assert.Equal(30, created.Rotation.IntervalMinutes);
-        Assert.Equal(240, created.Fetching.MinSyncCooldownMinutes);
+        Assert.Equal(60, created.Fetching.MinSyncCooldownMinutes);
 
-        created.Fetching.MinSyncCooldownMinutes = 5; // Attempt to set aggressively low cooldown
+        created.Fetching.MinSyncCooldownMinutes = 2; // Attempt to set aggressively low cooldown
         created.Fetching.MaxSyncsPerDay = 99;
         store.Save(created);
 
         var reloaded = store.LoadOrCreate();
-        Assert.Equal(60, reloaded.Fetching.MinSyncCooldownMinutes);
-        Assert.Equal(12, reloaded.Fetching.MaxSyncsPerDay);
+        Assert.Equal(15, reloaded.Fetching.MinSyncCooldownMinutes);
+        Assert.Equal(24, reloaded.Fetching.MaxSyncsPerDay);
     }
 
     public void Dispose()

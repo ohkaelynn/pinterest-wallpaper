@@ -12,10 +12,10 @@ public static class ContextMenuRegistrar
         ("01_Next", "Next Wallpaper", AppCommand.Next, false),
         ("02_Prev", "Previous Wallpaper", AppCommand.Previous, false),
         ("03_LikePin", "Like on Pinterest", AppCommand.LikeOnPinterest, true),
-        ("04_SavePin", "Save to Pinterest Board", AppCommand.SaveToPinterest, false),
-        ("05_Open", "Open Pin in Browser", AppCommand.OpenPin, false),
-        ("06_Skip", "Skip && Hide This Wallpaper", AppCommand.SkipAndHide, true),
-        ("07_Pause", "Pause / Resume Rotation", AppCommand.TogglePause, false)
+        ("04_SavePin", "Save to Board", AppCommand.SaveToPinterest, false),
+        ("05_Open", "Open in Browser", AppCommand.OpenPin, false),
+        ("06_Skip", "Skip && Hide", AppCommand.SkipAndHide, true),
+        ("07_Pause", "Pause / Resume", AppCommand.TogglePause, false)
     ];
 
     public static bool IsInstalled()
