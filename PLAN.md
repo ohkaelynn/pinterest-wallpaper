@@ -48,6 +48,10 @@
     "minSyncCooldownMinutes": 240,
     "maxSyncsPerDay": 4,
     "maxScrollStepsPerSource": 3
+  },
+  "actions": {
+    "defaultSaveBoardName": "",
+    "likeWhenSaving": true
   }
 }
 ```
@@ -73,8 +77,9 @@
    - Wire **Save / Pin to Pinterest** to save the current wallpaper directly to a chosen Pinterest board via the logged-in WebView2 session.
    - *Done when:* Local cache refills naturally in the background without aggressive requests.
 
-4. **Phase 4 — Settings UI & Polish**
+4. **Phase 4 — Settings UI, Background Like/Save & Polish**
    - Clean WPF settings window: manage boards/searches/weights, timings, resolution filters, cache size, history/blocklist, and view sync status ("Last sync · daily budget · cached count").
+   - Background Like & Save via hidden WebView2 (uses generic `actions.defaultSaveBoardName` or Pinterest's default *My Saves*, plus optional Heart/Like reaction—no hardcoded user/board names, serialized with short cooldowns).
    - Start-with-Windows toggle (`HKCU\...\Run`).
 
 5. **Phase 5 — Release & Optional Win11 Top-Level Menu**
