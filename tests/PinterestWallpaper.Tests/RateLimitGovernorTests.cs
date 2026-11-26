@@ -27,10 +27,13 @@ public sealed class RateLimitGovernorTests : IDisposable
         // Initial sync allowed when pool is empty
         Assert.True(gov.ShouldAutoSync(cfg, t0).Allowed);
 
-        // After a sync, cooldown blocks for 4 hours
+        // Manual sync bypasses auto-sync cooldown & daily cap (still obeys 429 backoff)
         gov.RecordSuccess(10, t0);
-        Assert.False(gov.CanSync(cfg, t0.AddHours(2)).Allowed);
-        Assert.True(gov.CanSync(cfg, t0.AddHours(4)).Allowed);
+        Assert.True(gov.CanSync(cfg, t0.AddSeconds(10), isManual: true).Allowed);
+
+        // Auto sync still obeys the full configured cooldown
+        Assert.False(gov.CanSync(cfg, t0.AddHours(2), isManual: false).Allowed);
+        Assert.True(gov.CanSync(cfg, t0.AddHours(4), isManual: false).Allowed);
 
         // Second sync reaches MaxSyncsPerDay = 2
         gov.RecordSuccess(5, t0.AddHours(4));
@@ -38,14 +41,14 @@ public sealed class RateLimitGovernorTests : IDisposable
         Assert.False(dailyBlocked.Allowed);
         Assert.Contains("Daily sync budget", dailyBlocked.Reason);
 
-        // Next day: simulate rate limit -> 30m backoff, then 2h backoff
+        // Next day: simulate rate limit -> 15m backoff, then 1h backoff
         var day2 = t0.AddHours(29);
         var b1 = gov.RecordRateLimitOrChallenge(day2);
-        Assert.Equal(TimeSpan.FromMinutes(30), b1);
-        Assert.False(gov.CanSync(cfg, day2.AddMinutes(15)).Allowed);
+        Assert.Equal(TimeSpan.FromMinutes(15), b1);
+        Assert.False(gov.CanSync(cfg, day2.AddMinutes(10), isManual: true).Allowed);
 
-        var b2 = gov.RecordRateLimitOrChallenge(day2.AddMinutes(30));
-        Assert.Equal(TimeSpan.FromHours(2), b2);
+        var b2 = gov.RecordRateLimitOrChallenge(day2.AddMinutes(15));
+        Assert.Equal(TimeSpan.FromHours(1), b2);
         Assert.Equal(2, gov.GetConsecutiveFailures());
     }
 

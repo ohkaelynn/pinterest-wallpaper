@@ -47,6 +47,29 @@ public static class CacheManager
         return evicted;
     }
 
+    public static int ClearCache(StateDatabase db, string cacheDirectory)
+    {
+        var deleted = 0;
+        if (Directory.Exists(cacheDirectory))
+        {
+            foreach (var file in Directory.EnumerateFiles(cacheDirectory))
+            {
+                try
+                {
+                    File.Delete(file);
+                    deleted++;
+                }
+                catch
+                {
+                    // Skip locked files.
+                }
+            }
+        }
+
+        db.ClearAllPins();
+        return deleted;
+    }
+
     private static long GetDirectorySizeBytes(string directory)
     {
         long total = 0;

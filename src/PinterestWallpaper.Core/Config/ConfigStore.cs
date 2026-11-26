@@ -51,8 +51,9 @@ public sealed class ConfigStore
     {
         config.Rotation.IntervalMinutes = Math.Clamp(config.Rotation.IntervalMinutes, 1, 1440);
         config.Rotation.JitterPercent = Math.Clamp(config.Rotation.JitterPercent, 0, 50);
-        config.Fetching.MinSyncCooldownMinutes = Math.Max(config.Fetching.MinSyncCooldownMinutes, 15);
-        config.Fetching.MaxSyncsPerDay = Math.Clamp(config.Fetching.MaxSyncsPerDay, 1, 24);
+        config.Fetching.MinSyncCooldownMinutes = Math.Max(config.Fetching.MinSyncCooldownMinutes, 5);
+        config.Fetching.MaxSyncsPerDay = Math.Clamp(config.Fetching.MaxSyncsPerDay, 1, 48);
+        config.Fetching.MaxPinsPerSync = Math.Clamp(config.Fetching.MaxPinsPerSync, 1, 100);
         config.Fetching.MaxScrollStepsPerSource = Math.Clamp(config.Fetching.MaxScrollStepsPerSource, 1, 8);
         config.Fetching.MaxCacheMb = Math.Clamp(config.Fetching.MaxCacheMb, 50, 10000);
     }

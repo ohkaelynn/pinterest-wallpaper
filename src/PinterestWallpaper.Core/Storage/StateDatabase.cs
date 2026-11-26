@@ -180,6 +180,13 @@ public sealed class StateDatabase : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    public int ClearAllPins()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM pins; DELETE FROM history;";
+        return cmd.ExecuteNonQuery();
+    }
+
     public void SetFavorite(string pinId, bool isFavorite)
     {
         using var cmd = _connection.CreateCommand();

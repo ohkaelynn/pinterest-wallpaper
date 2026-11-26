@@ -30,7 +30,14 @@ public sealed class TrayIconHost : IDisposable
         _rotation = rotation;
         _appIcon = LoadAppIcon();
 
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip
+        {
+            ShowImageMargin = false,
+            BackColor = Color.FromArgb(28, 32, 40),
+            ForeColor = Color.FromArgb(243, 245, 248),
+            Font = new Font("Segoe UI", 9.5f),
+            Renderer = new DarkMenuRenderer()
+        };
         menu.Items.Add("Next Wallpaper", null, (_, _) => executeCommand(AppCommand.Next));
         menu.Items.Add("Previous Wallpaper", null, (_, _) => executeCommand(AppCommand.Previous));
         menu.Items.Add(new ToolStripSeparator());
@@ -40,7 +47,7 @@ public sealed class TrayIconHost : IDisposable
         _savePinItem = new ToolStripMenuItem("Save to Board", null, (_, _) => executeCommand(AppCommand.SaveToPinterest));
         menu.Items.Add(_savePinItem);
         menu.Items.Add("Open in Browser", null, (_, _) => executeCommand(AppCommand.OpenPin));
-        menu.Items.Add("Skip & Hide", null, (_, _) => executeCommand(AppCommand.SkipAndHide));
+        menu.Items.Add("Skip && Hide", null, (_, _) => executeCommand(AppCommand.SkipAndHide));
         menu.Items.Add(new ToolStripSeparator());
 
         _pauseItem = new ToolStripMenuItem("Pause Rotation", null, (_, _) => executeCommand(AppCommand.TogglePause));
@@ -120,5 +127,37 @@ public sealed class TrayIconHost : IDisposable
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _appIcon.Dispose();
+    }
+
+    private sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
+    {
+        public DarkMenuRenderer() : base(new DarkColorTable()) { }
+
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            e.TextColor = e.Item.Enabled
+                ? Color.FromArgb(243, 245, 248)
+                : Color.FromArgb(120, 128, 142);
+            base.OnRenderItemText(e);
+        }
+
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            var y = e.Item.Height / 2;
+            using var pen = new Pen(Color.FromArgb(46, 53, 66));
+            e.Graphics.DrawLine(pen, 8, y, e.Item.Width - 8, y);
+        }
+    }
+
+    private sealed class DarkColorTable : ProfessionalColorTable
+    {
+        public override Color ToolStripDropDownBackground => Color.FromArgb(28, 32, 40);
+        public override Color MenuBorder => Color.FromArgb(52, 60, 74);
+        public override Color MenuItemBorder => Color.Transparent;
+        public override Color MenuItemSelected => Color.FromArgb(45, 52, 66);
+        public override Color MenuItemSelectedGradientBegin => Color.FromArgb(45, 52, 66);
+        public override Color MenuItemSelectedGradientEnd => Color.FromArgb(45, 52, 66);
+        public override Color CheckBackground => Color.FromArgb(124, 58, 237);
+        public override Color CheckSelectedBackground => Color.FromArgb(124, 58, 237);
     }
 }

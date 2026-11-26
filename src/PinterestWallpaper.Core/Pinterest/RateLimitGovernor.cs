@@ -12,9 +12,9 @@ public sealed class RateLimitGovernor
 
     private static readonly TimeSpan[] BackoffSchedule =
     [
-        TimeSpan.FromMinutes(30),
-        TimeSpan.FromHours(2),
-        TimeSpan.FromHours(6),
+        TimeSpan.FromMinutes(15),
+        TimeSpan.FromHours(1),
+        TimeSpan.FromHours(4),
         TimeSpan.FromHours(12)
     ];
 
@@ -27,7 +27,7 @@ public sealed class RateLimitGovernor
         _random = random ?? Random.Shared;
     }
 
-    public SyncDecision CanSync(FetchingConfig config, DateTimeOffset nowUtc)
+    public SyncDecision CanSync(FetchingConfig config, DateTimeOffset nowUtc, bool isManual = false)
     {
         var backoffUntil = GetBackoffUntilUtc();
         if (backoffUntil is not null && nowUtc < backoffUntil.Value)
@@ -36,19 +36,25 @@ public sealed class RateLimitGovernor
             return new SyncDecision(false, $"In rate-limit backoff for another {Math.Ceiling(remaining.TotalMinutes)} min.");
         }
 
-        var cooldownMinutes = Math.Max(config.MinSyncCooldownMinutes, 15);
+        // Manual "Sync Now" bypasses auto-sync cooldown & daily cap (still obeys 429 backoff).
+        if (isManual)
+        {
+            return new SyncDecision(true, "Allowed.");
+        }
+
         var lastSync = _db.GetLastSyncTimeUtc();
         if (lastSync is not null)
         {
+            var requiredCooldown = TimeSpan.FromMinutes(Math.Max(config.MinSyncCooldownMinutes, 5));
             var elapsed = nowUtc - lastSync.Value;
-            if (elapsed < TimeSpan.FromMinutes(cooldownMinutes))
+            if (elapsed < requiredCooldown)
             {
-                var remaining = TimeSpan.FromMinutes(cooldownMinutes) - elapsed;
+                var remaining = requiredCooldown - elapsed;
                 return new SyncDecision(false, $"Cooldown active ({Math.Ceiling(remaining.TotalMinutes)} min remaining).");
             }
         }
 
-        var maxPerDay = Math.Clamp(config.MaxSyncsPerDay, 1, 24);
+        var maxPerDay = Math.Clamp(config.MaxSyncsPerDay, 1, 48);
         var syncsLast24h = _db.GetSyncCountSince(nowUtc.AddHours(-24));
         if (syncsLast24h >= maxPerDay)
         {
@@ -66,14 +72,14 @@ public sealed class RateLimitGovernor
             return new SyncDecision(false, $"Local pool healthy ({unseen} unseen >= {config.LowWaterMark}).");
         }
 
-        return CanSync(config, nowUtc);
+        return CanSync(config, nowUtc, isManual: false);
     }
 
     public TimeSpan GetHumanStepDelay() =>
-        TimeSpan.FromMilliseconds(_random.Next(1500, 3500));
+        TimeSpan.FromMilliseconds(_random.Next(900, 1800));
 
     public TimeSpan GetImageDownloadDelay() =>
-        TimeSpan.FromMilliseconds(_random.Next(600, 1200));
+        TimeSpan.FromMilliseconds(_random.Next(150, 350));
 
     public void RecordSuccess(int pinsAdded, DateTimeOffset nowUtc)
     {

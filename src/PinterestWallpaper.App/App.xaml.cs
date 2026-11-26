@@ -103,9 +103,11 @@ public partial class App : Application
         }
 
         _settingsWindow = new SettingsWindow(
+            _paths!,
             _config,
             _db,
             _governor,
+            _syncService!,
             SaveConfigFromUi,
             OpenPinterestLogin,
             () => _ = RunSyncAsync(isManual: true),
@@ -136,6 +138,14 @@ public partial class App : Application
         }
 
         var loginWindow = new PinterestLoginWindow(_paths.WebView2Directory);
+        loginWindow.Closed += (_, _) =>
+        {
+            if (loginWindow.SignedInDetected && _db is not null)
+            {
+                _db.SetStateValue(PinterestSyncService.SessionStatusKey, "signed_in");
+                _settingsWindow?.RefreshStatus();
+            }
+        };
         loginWindow.Show();
     }
 
@@ -167,6 +177,7 @@ public partial class App : Application
         try
         {
             var result = await _syncService.TrySyncAsync(_config, isManual, _syncCts.Token);
+            _settingsWindow?.RefreshStatus();
             if (isManual || result.PinsAdded > 0 || result.Message.Contains("expired", StringComparison.OrdinalIgnoreCase))
             {
                 _tray?.ShowNotification("Pinterest Wallpaper", result.Message);

@@ -37,16 +37,25 @@ public static class ImageFilter
             return new ImageCheckResult(false, "Unsupported image extension.");
         }
 
+        // Fast header-only dimension check before decoding full pixels.
+        using (var codec = SKCodec.Create(filePath))
+        {
+            if (codec is null || codec.Info.Width <= 0 || codec.Info.Height <= 0)
+            {
+                return new ImageCheckResult(false, "Could not decode image.");
+            }
+
+            var headerCheck = ValidateDimensions(codec.Info.Width, codec.Info.Height, filter);
+            if (!headerCheck.IsValid)
+            {
+                return headerCheck;
+            }
+        }
+
         using var bitmap = SKBitmap.Decode(filePath);
         if (bitmap is null || bitmap.Width <= 0 || bitmap.Height <= 0)
         {
             return new ImageCheckResult(false, "Could not decode image.");
-        }
-
-        var dimResult = ValidateDimensions(bitmap.Width, bitmap.Height, filter);
-        if (!dimResult.IsValid)
-        {
-            return dimResult;
         }
 
         var hash = ComputeDifferenceHash(bitmap);

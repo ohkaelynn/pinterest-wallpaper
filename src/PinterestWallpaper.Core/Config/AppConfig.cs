@@ -89,22 +89,23 @@ public enum ImageOrientation
 
 public sealed class FilterConfig
 {
-    public int MinWidth { get; set; } = 1920;
-    public int MinHeight { get; set; } = 1080;
+    public int MinWidth { get; set; } = 1280;
+    public int MinHeight { get; set; } = 720;
     public int MaxWidth { get; set; } = 10000;
     public int MaxHeight { get; set; } = 10000;
     public ImageOrientation Orientation { get; set; } = ImageOrientation.Landscape;
-    public double AspectRatioMin { get; set; } = 1.3;
+    public double AspectRatioMin { get; set; } = 1.25;
     public double AspectRatioMax { get; set; } = 3.6;
     public bool DeduplicateSimilar { get; set; } = true;
 }
 
 public sealed class FetchingConfig
 {
-    public int LowWaterMark { get; set; } = 15;
+    public int LowWaterMark { get; set; } = 10;
     public int TargetPoolSize { get; set; } = 50;
+    public int MaxPinsPerSync { get; set; } = 25;
     public int MaxCacheMb { get; set; } = 500;
-    public int MinSyncCooldownMinutes { get; set; } = 60;
-    public int MaxSyncsPerDay { get; set; } = 12;
-    public int MaxScrollStepsPerSource { get; set; } = 4;
+    public int MinSyncCooldownMinutes { get; set; } = 30;
+    public int MaxSyncsPerDay { get; set; } = 24;
+    public int MaxScrollStepsPerSource { get; set; } = 6;
 }

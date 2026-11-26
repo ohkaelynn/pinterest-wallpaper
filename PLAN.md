@@ -60,29 +60,22 @@
 
 ## Milestones
 
-1. **Phase 1 — Core App & Local Rotation**
-   - Scaffold .NET 8 solution, config loader, SQLite state (`pins`, `history`, `blocklist`), image filter (resolution/aspect/dedupe), `IDesktopWallpaper` wrapper, and rotation timer (with fullscreen/battery pause).
-   - *Done when:* App rotates local test wallpapers reliably on a timer and via tray menu.
+1. **Phase 1 — Core App & Local Rotation** *(Done)*
+   - .NET 8 solution, config loader, SQLite state (`pins`, `history`, `blocklist`), SkiaSharp image filter (resolution/aspect/dHash dedupe), `IDesktopWallpaper` wrapper, and rotation timer (with fullscreen/battery pause).
 
-2. **Phase 2 — Desktop Right-Click Menu**
-   - Add single-instance Named Pipe IPC so invoking `PinterestWallpaper.exe --next` (or `--prev`, `--save-pin`, `--open-pin`, `--skip`, `--toggle-pause`) tells the running app to act immediately (<150ms).
-   - Add **Save / Pin to Pinterest** action (marks favorite locally and opens the pin on Pinterest; Phase 3 wires direct board-saving via WebView2).
-   - Add toggleable `HKCU` Registry installer/uninstaller for the desktop right-click submenu.
-   - *Done when:* Right-clicking the desktop swaps, saves, or skips wallpapers instantly.
+2. **Phase 2 — Desktop Right-Click Menu** *(Done)*
+   - Single-instance Named Pipe IPC (`--next`, `--prev`, `--like-pin`, `--save-pin`, `--open-pin`, `--skip`, `--toggle-pause`).
+   - Toggleable `HKCU` Registry installer/uninstaller for the desktop right-click submenu.
 
-3. **Phase 3 — Personal Pinterest Sync (WebView2)**
-   - Embed WebView2 for one-time interactive login (`pinterest.com/login`).
-   - Add **Rate-Limit Governor** (cooldowns, daily sync cap, randomized delays, sequential image downloads, backoff on `429`/challenges).
-   - Extract high-res (`originals`) image URLs from configured boards, search terms, and optional home feed into the local cache.
-   - Wire **Save / Pin to Pinterest** to save the current wallpaper directly to a chosen Pinterest board via the logged-in WebView2 session.
-   - *Done when:* Local cache refills naturally in the background without aggressive requests.
+3. **Phase 3 — Personal Pinterest Sync (WebView2)** *(Done)*
+   - Embedded WebView2 for interactive login (`pinterest.com/login`) and gentle background sync.
+   - Rate-Limit Governor (cooldowns, daily cap, backoff on `429`/challenges), high-res `originals` pin extraction + DOM fallback, and LRU cache eviction.
 
-4. **Phase 4 — Settings UI, Background Like/Save & Polish**
-   - Clean WPF settings window: manage boards/searches/weights, timings, resolution filters, cache size, history/blocklist, and view sync status ("Last sync · daily budget · cached count").
-   - Background Like & Save via hidden WebView2 (uses generic `actions.defaultSaveBoardName` or Pinterest's default *My Saves*, plus optional Heart/Like reaction—no hardcoded user/board names, serialized with short cooldowns).
-   - Start-with-Windows toggle (`HKCU\...\Run`).
+4. **Phase 4 — Settings HUD, Background Like/Save & Polish** *(Done)*
+   - Dark Fluent WPF Settings HUD with resolution presets, board loader & dropdowns, login status, Clear Cache / Open Cache Folder, and Start with Windows (`HKCU\...\Run`).
+   - Verified silent background **Like on Pinterest** and **Save to Board**, dark tray menu, and custom `PW` app icon.
+   - Strict `pinterest.*` / `*.pinimg.com` URL allowlist, 50 MB download cap, and Sign Out & Clear Session.
 
-5. **Phase 5 — Release & Optional Win11 Top-Level Menu**
-   - Unit tests (governor, filters, config, SQLite—all mocked, no live Pinterest calls).
-   - GitHub Actions release build (portable ZIP / installer).
-   - Optional: Sparse MSIX + `IExplorerCommand` so "Next Wallpaper" appears directly in Windows 11's top-level context menu.
+5. **Phase 5 — Release & Optional Win11 Top-Level Menu** *(Next)*
+   - Portable ZIP / installer packaging and optional GitHub Actions release builds with SHA-256 checksums.
+   - Optional: Sparse MSIX + `IExplorerCommand` so *Pinterest Wallpaper* appears directly in Windows 11's top-level context menu.
