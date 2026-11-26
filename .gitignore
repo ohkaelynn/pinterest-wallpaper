@@ -1,0 +1,27 @@
+# .NET / Visual Studio
+bin/
+obj/
+*.user
+*.suo
+*.cache
+.vs/
+TestResults/
+*.trx
+*.coverage
+
+# Local user data & secrets (never commit!)
+config.local.json
+*.db
+*.db-shm
+*.db-wal
+*.dpapi
+session.*
+cookies.*
+WebView2/
+cache/
+logs/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
