@@ -6,6 +6,7 @@ using System.Windows;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using PinterestWallpaper.Core.Config;
+using PinterestWallpaper.Core.Diagnostics;
 using PinterestWallpaper.Core.Media;
 using PinterestWallpaper.Core.Pinterest;
 using PinterestWallpaper.Core.Storage;
@@ -24,6 +25,7 @@ public sealed class PinterestSyncService : IDisposable
     private readonly AppPaths _paths;
     private readonly StateDatabase _db;
     private readonly RateLimitGovernor _governor;
+    private readonly ActionLogger _log;
     private readonly SemaphoreSlim _syncLock = new(1, 1);
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private DateTimeOffset _lastWriteActionUtc = DateTimeOffset.MinValue;
@@ -33,6 +35,7 @@ public sealed class PinterestSyncService : IDisposable
         _paths = paths;
         _db = db;
         _governor = governor;
+        _log = new ActionLogger(paths.ActionLogFile);
         _http.DefaultRequestHeaders.UserAgent.ParseAdd(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0");
     }
@@ -343,10 +346,13 @@ public sealed class PinterestSyncService : IDisposable
         {
             Window? hostWindow = null;
             WebView2? webView = null;
+            var actionTag = likeOnly ? "like" : "save";
 
             try
             {
                 var rateLimited = false;
+                var likeClickStarted = false;
+                var likeConfirmedByNetwork = false;
                 var saveClickStarted = false;
                 var repinConfirmedByNetwork = false;
 
@@ -367,6 +373,7 @@ public sealed class PinterestSyncService : IDisposable
                     if (args.Response.StatusCode == 429)
                     {
                         rateLimited = true;
+                        _log.Info(actionTag, "HTTP 429 received.");
                         return;
                     }
 
@@ -375,25 +382,176 @@ public sealed class PinterestSyncService : IDisposable
                          args.Request.Uri.Contains("/graphql", StringComparison.OrdinalIgnoreCase)))
                     {
                         rateLimited = true;
+                        _log.Info(actionTag, "HTTP 403 on API endpoint.");
                         return;
                     }
 
-                    if (saveClickStarted &&
-                        args.Response.StatusCode == 200 &&
-                        string.Equals(args.Request.Method, "POST", StringComparison.OrdinalIgnoreCase) &&
-                        (args.Request.Uri.Contains("RepinResource", StringComparison.OrdinalIgnoreCase) ||
-                         args.Request.Uri.Contains("PinSave", StringComparison.OrdinalIgnoreCase) ||
-                         args.Request.Uri.Contains("SavePin", StringComparison.OrdinalIgnoreCase) ||
-                         args.Request.Uri.Contains("/graphql", StringComparison.OrdinalIgnoreCase)))
+                    if (args.Response.StatusCode is >= 200 and < 300 &&
+                        string.Equals(args.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
                     {
-                        repinConfirmedByNetwork = true;
+                        var uri = args.Request.Uri;
+                        if (likeClickStarted &&
+                            (uri.Contains("React", StringComparison.OrdinalIgnoreCase) ||
+                             uri.Contains("Like", StringComparison.OrdinalIgnoreCase) ||
+                             uri.Contains("/graphql", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            likeConfirmedByNetwork = true;
+                            _log.Info(actionTag, $"Confirmed by POST {args.Response.StatusCode}.");
+                        }
+
+                        if (saveClickStarted &&
+                            (uri.Contains("RepinResource", StringComparison.OrdinalIgnoreCase) ||
+                             uri.Contains("PinSave", StringComparison.OrdinalIgnoreCase) ||
+                             uri.Contains("SavePin", StringComparison.OrdinalIgnoreCase) ||
+                             uri.Contains("BoardPin", StringComparison.OrdinalIgnoreCase) ||
+                             uri.Contains("/graphql", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            repinConfirmedByNetwork = true;
+                            _log.Info(actionTag, $"Confirmed by POST {args.Response.StatusCode}.");
+                        }
                     }
                 };
 
                 await NavigateAndWaitAsync(webView, pinUrl, ct);
-                await WaitForConditionAsync(webView,
-                    "!!document.querySelector('[data-test-id=\"PinBetterSaveButton\"], [data-test-id=\"reactions-button\"], button[aria-label=\"Save\"]')",
-                    maxWaitMs: 7000, ct);
+
+                var currentUrl = webView.CoreWebView2.Source ?? string.Empty;
+                if (currentUrl.Contains("/login", StringComparison.OrdinalIgnoreCase))
+                {
+                    _log.Info(actionTag, "Redirected to /login; session expired.");
+                    tcs.TrySetResult(new PinActionResult(false, true, "Pinterest session expired; sign in again."));
+                    return;
+                }
+
+                if (likeOnly)
+                {
+                    const string waitLikeBtnExpr = """
+                        (() => {
+                            const direct = document.querySelector('[data-test-id="reactions-button"], [data-test-id="reaction-button"]');
+                            if (direct) return true;
+                            return Array.from(document.querySelectorAll('button')).some(b => {
+                                const r = b.getBoundingClientRect();
+                                if (r.width === 0 || r.height === 0 || r.top < 0 || r.top > 500) return false;
+                                const lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+                                return lbl.includes('react') || lbl.includes('like') || lbl.includes('love') || lbl.includes('heart');
+                            });
+                        })()
+                        """;
+                    await WaitForConditionAsync(webView, waitLikeBtnExpr, maxWaitMs: 7000, ct);
+
+                    if (rateLimited)
+                    {
+                        _governor.RecordRateLimitOrChallenge(DateTimeOffset.UtcNow, "rate_limited");
+                        tcs.TrySetResult(new PinActionResult(false, true, "Pinterest rate-limited the action; backing off."));
+                        return;
+                    }
+
+                    const string likeScript = """
+                        (() => {
+                            const isLikedEl = (el) => {
+                                if (el.getAttribute('aria-pressed') === 'true') return true;
+                                const lbl = (el.getAttribute('aria-label') || '').toLowerCase();
+                                if (lbl.includes('remove') || lbl.includes('unlike')) return true;
+                                const svg = el.querySelector('svg');
+                                if (svg) {
+                                    const color = (window.getComputedStyle(svg).color || '').toLowerCase();
+                                    const fill = (svg.getAttribute('fill') || window.getComputedStyle(svg).fill || '').toLowerCase();
+                                    if (color.includes('230, 0, 35') || fill.includes('230, 0, 35') || fill.includes('#e60023')) return true;
+                                }
+                                return false;
+                            };
+
+                            const root = document.querySelector('[data-test-id="closeup-action-bar"], [data-test-id="closeup-body"]') || document;
+                            let btn = root.querySelector('[data-test-id="reactions-button"], [data-test-id="reaction-button"]');
+                            if (!btn) {
+                                btn = Array.from(root.querySelectorAll('button')).find(b => {
+                                    const r = b.getBoundingClientRect();
+                                    if (r.width === 0 || r.height === 0 || r.top < 0 || r.top > 500) return false;
+                                    const lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+                                    const tid = (b.getAttribute('data-test-id') || '').toLowerCase();
+                                    if (tid.includes('count')) return false;
+                                    return lbl.includes('react') || lbl.includes('like') || lbl.includes('love') || lbl.includes('heart');
+                                });
+                            }
+                            if (!btn) return 'missing';
+                            if (isLikedEl(btn)) return 'already';
+                            btn.click();
+                            return 'clicked';
+                        })()
+                        """;
+
+                    likeClickStarted = true;
+                    var likeRaw = await webView.CoreWebView2.ExecuteScriptAsync(likeScript);
+                    var likeStatus = JsonSerializer.Deserialize<string>(likeRaw) ?? "missing";
+                    _log.Info("like", $"clickStatus={likeStatus}");
+
+                    if (likeStatus == "already")
+                    {
+                        tcs.TrySetResult(new PinActionResult(true, false, "Already liked on Pinterest."));
+                        return;
+                    }
+
+                    if (likeStatus == "clicked")
+                    {
+                        const string verifyLikedScript = """
+                            (() => {
+                                const root = document.querySelector('[data-test-id="closeup-action-bar"], [data-test-id="closeup-body"]') || document;
+                                const btn = root.querySelector('[data-test-id="reactions-button"], [data-test-id="reaction-button"]') ||
+                                    Array.from(root.querySelectorAll('button')).find(b => {
+                                        const r = b.getBoundingClientRect();
+                                        if (r.width === 0 || r.height === 0 || r.top < 0 || r.top > 500) return false;
+                                        const lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+                                        return lbl.includes('react') || lbl.includes('like') || lbl.includes('love') || lbl.includes('heart');
+                                    });
+                                if (!btn) return false;
+                                if (btn.getAttribute('aria-pressed') === 'true') return true;
+                                const lbl = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                if (lbl.includes('remove') || lbl.includes('unlike')) return true;
+                                const svg = btn.querySelector('svg');
+                                if (svg) {
+                                    const color = (window.getComputedStyle(svg).color || '').toLowerCase();
+                                    const fill = (svg.getAttribute('fill') || window.getComputedStyle(svg).fill || '').toLowerCase();
+                                    if (color.includes('230, 0, 35') || fill.includes('230, 0, 35') || fill.includes('#e60023')) return true;
+                                }
+                                return false;
+                            })()
+                            """;
+
+                        var domLiked = false;
+                        for (var i = 0; i < 20; i++)
+                        {
+                            if (likeConfirmedByNetwork)
+                            {
+                                break;
+                            }
+
+                            domLiked = await webView.CoreWebView2.ExecuteScriptAsync(verifyLikedScript) == "true";
+                            if (domLiked)
+                            {
+                                // Give the network POST a tiny moment to complete before disposing WebView2.
+                                await Task.Delay(TimeSpan.FromMilliseconds(350), ct);
+                                break;
+                            }
+
+                            await Task.Delay(TimeSpan.FromMilliseconds(150), ct);
+                        }
+
+                        _log.Info("like", $"confirmed net={likeConfirmedByNetwork} dom={domLiked}");
+                        if (likeConfirmedByNetwork || domLiked)
+                        {
+                            tcs.TrySetResult(new PinActionResult(true, false, "Liked wallpaper on Pinterest."));
+                            return;
+                        }
+                    }
+
+                    tcs.TrySetResult(new PinActionResult(false, true, "Could not confirm Like on Pinterest; opening pin in browser."));
+                    return;
+                }
+
+                // Wait specifically for the main Pin closeup's Save button (and board dropdown if saving to a named board).
+                var waitSaveExpr = string.IsNullOrEmpty(boardName)
+                    ? "!!document.querySelector('[data-test-id=\"PinBetterSaveButton\"], button[aria-label=\"Save\"]')"
+                    : "!!document.querySelector('[data-test-id=\"board-dropdown-select-button\"]') || !!document.querySelector('[data-test-id=\"PinBetterSaveButton\"]')";
+                await WaitForConditionAsync(webView, waitSaveExpr, maxWaitMs: 7000, ct);
 
                 if (rateLimited)
                 {
@@ -402,55 +560,23 @@ public sealed class PinterestSyncService : IDisposable
                     return;
                 }
 
-                var currentUrl = webView.CoreWebView2.Source ?? string.Empty;
-                if (currentUrl.Contains("/login", StringComparison.OrdinalIgnoreCase))
-                {
-                    tcs.TrySetResult(new PinActionResult(false, true, "Pinterest session expired; sign in again."));
-                    return;
-                }
-
-                if (likeOnly)
-                {
-                    const string likeScript = """
-                        (() => {
-                            const btn = document.querySelector('[data-test-id="reactions-button"], button[aria-label*="React"], button[aria-label*="Like"]');
-                            if (!btn) return 'missing';
-                            const pressed = btn.getAttribute('aria-pressed');
-                            if (pressed === 'true') return 'already';
-                            btn.click();
-                            return 'clicked';
-                        })()
-                        """;
-                    var likeRaw = await webView.CoreWebView2.ExecuteScriptAsync(likeScript);
-                    var likeStatus = JsonSerializer.Deserialize<string>(likeRaw);
-                    if (likeStatus == "clicked")
-                    {
-                        await Task.Delay(TimeSpan.FromMilliseconds(450), ct);
-                    }
-
-                    var msg = likeStatus switch
-                    {
-                        "clicked" => "Liked wallpaper on Pinterest.",
-                        "already" => "Already liked on Pinterest.",
-                        _ => "Could not locate Like button; opening pin in browser."
-                    };
-                    tcs.TrySetResult(new PinActionResult(likeStatus is "clicked" or "already", likeStatus == "missing", msg));
-                    return;
-                }
-
                 // Save to Pinterest (either default My Saves or a specific board by name).
                 var alreadySaved = false;
                 var clickedSave = false;
 
+                // Scoped strictly to the main closeup pin action bar (top < 500px) so we never click "More like this" pins below.
                 const string saveMainButtonScript = """
                     (() => {
+                        const root = document.querySelector('[data-test-id="closeup-action-bar"], [data-test-id="closeup-body"]') || document;
                         const candidates = [
-                            ...document.querySelectorAll('[data-test-id="PinBetterSaveButton"] button'),
-                            ...document.querySelectorAll('[data-test-id="PinBetterSaveButton"]'),
-                            ...document.querySelectorAll('button[aria-label="Save"]'),
-                            ...document.querySelectorAll('button')
+                            ...root.querySelectorAll('[data-test-id="PinBetterSaveButton"] button'),
+                            ...root.querySelectorAll('[data-test-id="PinBetterSaveButton"]'),
+                            ...root.querySelectorAll('button[aria-label="Save"]'),
+                            ...root.querySelectorAll('button')
                         ];
                         const btn = candidates.find(el => {
+                            const r = el.getBoundingClientRect();
+                            if (r.width === 0 || r.height === 0 || r.top < 0 || r.top > 500) return false;
                             const t = (el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
                             return t === 'save' || t === 'saved';
                         });
@@ -466,123 +592,182 @@ public sealed class PinterestSyncService : IDisposable
                 {
                     saveClickStarted = true;
                     var saveRaw = await webView.CoreWebView2.ExecuteScriptAsync(saveMainButtonScript);
-                    var saveStatus = JsonSerializer.Deserialize<string>(saveRaw);
+                    var saveStatus = JsonSerializer.Deserialize<string>(saveRaw) ?? "missing";
+                    _log.Info("save", $"defaultSave={saveStatus}");
                     alreadySaved = saveStatus == "already";
                     clickedSave = saveStatus == "clicked";
                 }
                 else
                 {
-                    const string openDropdownScript = """
+                    // Check if the board picker pill is already set to our target board — if so, just click Save directly!
+                    var escapedBoard = JsonSerializer.Serialize(boardName);
+                    var checkCurrentBoardScript = $$"""
                         (() => {
-                            const btn =
-                                document.querySelector('[data-test-id="board-dropdown-select-button"]') ||
-                                document.querySelector('button[aria-label*="Select a board"]') ||
-                                document.querySelector('button[aria-label*="board"]') ||
-                                Array.from(document.querySelectorAll('button')).find(b => {
-                                    const t = (b.innerText || '').trim().toLowerCase();
-                                    return t === 'my saves' || t === 'profile';
-                                });
-                            if (!btn) return false;
-                            btn.click();
-                            return true;
+                            const root = document.querySelector('[data-test-id="closeup-action-bar"], [data-test-id="closeup-body"]') || document;
+                            const pill = root.querySelector('[data-test-id="board-dropdown-select-button"]');
+                            if (!pill) return 'no_pill';
+                            const txt = (pill.innerText || '').trim().toLowerCase();
+                            const target = {{escapedBoard}}.toLowerCase();
+                            return txt === target ? 'already_selected' : 'different';
                         })()
                         """;
-                    var opened = await webView.CoreWebView2.ExecuteScriptAsync(openDropdownScript);
-                    if (opened == "true")
+                    var pillState = JsonSerializer.Deserialize<string>(
+                        await webView.CoreWebView2.ExecuteScriptAsync(checkCurrentBoardScript)) ?? "no_pill";
+                    _log.Info("save", $"pillState={pillState}");
+
+                    if (pillState == "already_selected")
                     {
-                        // Wait specifically for the Save popover's search input (excluding Pinterest's main header search bar).
-                        const string findPopoverSearchExpr = """
+                        saveClickStarted = true;
+                        var saveRaw = await webView.CoreWebView2.ExecuteScriptAsync(saveMainButtonScript);
+                        var saveStatus = JsonSerializer.Deserialize<string>(saveRaw) ?? "missing";
+                        _log.Info("save", $"directSave={saveStatus}");
+                        alreadySaved = saveStatus == "already";
+                        clickedSave = saveStatus == "clicked";
+                    }
+                    else
+                    {
+                        const string openDropdownScript = """
                             (() => {
-                                const inputs = Array.from(document.querySelectorAll('input[aria-label="Search"], input[placeholder*="Search"], [data-test-id="board-picker-search-input"] input, #pickerSearchField'));
-                                return inputs.some(i => i.id !== 'searchBoxInput' && !i.closest('header') && !i.closest('[data-test-id="search-box-input"]'));
+                                const root = document.querySelector('[data-test-id="closeup-action-bar"], [data-test-id="closeup-body"]') || document;
+                                const btn =
+                                    root.querySelector('[data-test-id="board-dropdown-select-button"]') ||
+                                    Array.from(root.querySelectorAll('button')).find(b => {
+                                        const r = b.getBoundingClientRect();
+                                        if (r.width === 0 || r.height === 0 || r.top < 0 || r.top > 500) return false;
+                                        const lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+                                        const t = (b.innerText || '').trim().toLowerCase();
+                                        return lbl.includes('select a board') || t === 'my saves' || t === 'profile';
+                                    });
+                                if (!btn) return false;
+                                btn.click();
+                                return true;
                             })()
                             """;
-                        await WaitForConditionAsync(webView, findPopoverSearchExpr, maxWaitMs: 3500, ct);
+                        var opened = await webView.CoreWebView2.ExecuteScriptAsync(openDropdownScript) == "true";
+                        _log.Info("save", $"dropdownOpened={opened}");
 
-                        var escapedBoard = JsonSerializer.Serialize(boardName);
-                        var searchBoardScript = $$"""
-                            (() => {
-                                const inputs = Array.from(document.querySelectorAll('#pickerSearchField, [data-test-id="board-picker-search-input"] input, input[aria-label="Search"], input[placeholder*="Search"]'));
-                                const input = inputs.find(i => i.id !== 'searchBoxInput' && !i.closest('header') && !i.closest('[data-test-id="search-box-input"]'));
-                                if (input) {
+                        if (opened)
+                        {
+                            // Wait for the Save popover (search input or board rows), strictly excluding Pinterest's header search bar.
+                            const string findPopoverExpr = """
+                                (() => {
+                                    if (document.querySelector('[data-test-id^="board-row-"], #pickerSearchField, [data-test-id="board-picker-search-input"] input')) return true;
+                                    const inputs = Array.from(document.querySelectorAll('input[aria-label="Search"], input[placeholder*="Search"]'));
+                                    return inputs.some(i => i.id !== 'searchBoxInput' && !i.closest('header') && !i.closest('[data-test-id="search-box-input"]'));
+                                })()
+                                """;
+                            await WaitForConditionAsync(webView, findPopoverExpr, maxWaitMs: 3500, ct);
+
+                            var searchBoardScript = $$"""
+                                (() => {
+                                    const inputs = Array.from(document.querySelectorAll('#pickerSearchField, [data-test-id="board-picker-search-input"] input, [role="dialog"] input, input[aria-label="Search"], input[placeholder*="Search"]'));
+                                    const input = inputs.find(i => i.id !== 'searchBoxInput' && !i.closest('header') && !i.closest('[data-test-id="search-box-input"]'));
+                                    if (!input) return false;
                                     input.focus();
                                     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                     setter.call(input, {{escapedBoard}});
                                     input.dispatchEvent(new Event('input', { bubbles: true }));
                                     input.dispatchEvent(new Event('change', { bubbles: true }));
                                     return true;
-                                }
-                                return false;
-                            })()
-                            """;
-                        await webView.CoreWebView2.ExecuteScriptAsync(searchBoardScript);
-                        await Task.Delay(TimeSpan.FromMilliseconds(650), ct);
-
-                        // Hover matching board row so Pinterest renders its row Save button, then click Save or the row.
-                        var hoverRowScript = $$"""
-                            (() => {
-                                const target = {{escapedBoard}}.toLowerCase();
-                                const rows = Array.from(document.querySelectorAll('[data-test-id^="board-row-"], [role="listitem"], [role="button"]'));
-                                for (const row of rows) {
-                                    const text = (row.innerText || '').trim().toLowerCase();
-                                    const lines = text.split('\n').map(l => l.trim());
-                                    if (text === target || lines.includes(target)) {
-                                        row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                                        row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                                        row.setAttribute('data-pw-target-board', '1');
-                                        return true;
-                                    }
-                                }
-                                return false;
-                            })()
-                            """;
-                        var hovered = await webView.CoreWebView2.ExecuteScriptAsync(hoverRowScript);
-                        if (hovered == "true")
-                        {
-                            await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
-                            saveClickStarted = true;
-                            const string clickBoardSaveScript = """
-                                (() => {
-                                    const row = document.querySelector('[data-pw-target-board="1"]');
-                                    if (!row) return 'missing';
-                                    const saveBtn = Array.from(row.querySelectorAll('button')).find(b =>
-                                        (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase() === 'save');
-                                    if (saveBtn) {
-                                        saveBtn.click();
-                                        return 'clicked_save';
-                                    }
-                                    row.click();
-                                    return 'clicked_row';
                                 })()
                                 """;
-                            var rowRaw = await webView.CoreWebView2.ExecuteScriptAsync(clickBoardSaveScript);
-                            var rowResult = JsonSerializer.Deserialize<string>(rowRaw);
-                            clickedSave = rowResult is "clicked_save" or "clicked_row";
+                            var searched = await webView.CoreWebView2.ExecuteScriptAsync(searchBoardScript) == "true";
+                            _log.Info("save", $"popoverSearched={searched}");
 
-                            // If clicking the row only selected the board in the dropdown, click the main Save button too.
-                            if (rowResult == "clicked_row")
+                            // Poll for the matching board row inside the popover (excluding the dropdown trigger button & header).
+                            var waitRowExpr = $$"""
+                                (() => {
+                                    const target = {{escapedBoard}}.toLowerCase();
+                                    const rows = Array.from(document.querySelectorAll('[data-test-id^="board-row-"], [role="dialog"] [role="listitem"], [role="dialog"] [role="button"]'));
+                                    return rows.some(row => {
+                                        if (row.closest('header') || row.closest('[data-test-id="board-dropdown-select-button"]')) return false;
+                                        const tid = (row.getAttribute('data-test-id') || '').toLowerCase();
+                                        if (tid === 'board-row-' + target) return true;
+                                        const lines = (row.innerText || '').trim().toLowerCase().split('\n').map(l => l.trim());
+                                        return lines.includes(target);
+                                    });
+                                })()
+                                """;
+                            await WaitForConditionAsync(webView, waitRowExpr, maxWaitMs: 2500, ct);
+
+                            var hoverRowScript = $$"""
+                                (() => {
+                                    const target = {{escapedBoard}}.toLowerCase();
+                                    const rows = Array.from(document.querySelectorAll('[data-test-id^="board-row-"], [role="dialog"] [role="listitem"], [role="dialog"] [role="button"]'));
+                                    for (const row of rows) {
+                                        if (row.closest('header') || row.closest('[data-test-id="board-dropdown-select-button"]')) continue;
+                                        const tid = (row.getAttribute('data-test-id') || '').toLowerCase();
+                                        const lines = (row.innerText || '').trim().toLowerCase().split('\n').map(l => l.trim());
+                                        if (tid === 'board-row-' + target || lines.includes(target)) {
+                                            row.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }));
+                                            row.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+                                            row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                                            row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                                            row.setAttribute('data-pw-target-board', '1');
+                                            return true;
+                                        }
+                                    }
+                                    return false;
+                                })()
+                                """;
+                            var hovered = await webView.CoreWebView2.ExecuteScriptAsync(hoverRowScript) == "true";
+                            _log.Info("save", $"rowMatched={hovered}");
+
+                            if (hovered)
                             {
-                                await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
-                                if (!repinConfirmedByNetwork)
+                                await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+                                saveClickStarted = true;
+                                const string clickBoardSaveScript = """
+                                    (() => {
+                                        const row = document.querySelector('[data-pw-target-board="1"]');
+                                        if (!row) return 'missing';
+                                        const saveBtn = Array.from(row.querySelectorAll('button')).find(b =>
+                                            (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase() === 'save');
+                                        if (saveBtn) {
+                                            saveBtn.click();
+                                            return 'clicked_save';
+                                        }
+                                        row.click();
+                                        return 'clicked_row';
+                                    })()
+                                    """;
+                                var rowRaw = await webView.CoreWebView2.ExecuteScriptAsync(clickBoardSaveScript);
+                                var rowResult = JsonSerializer.Deserialize<string>(rowRaw) ?? "missing";
+                                _log.Info("save", $"rowClick={rowResult}");
+                                clickedSave = rowResult is "clicked_save" or "clicked_row";
+
+                                // If clicking the row only selected the board in the dropdown, click the main Save button too.
+                                if (rowResult == "clicked_row")
                                 {
-                                    await webView.CoreWebView2.ExecuteScriptAsync(saveMainButtonScript);
+                                    await Task.Delay(TimeSpan.FromMilliseconds(600), ct);
+                                    if (!repinConfirmedByNetwork)
+                                    {
+                                        var fallbackSave = JsonSerializer.Deserialize<string>(
+                                            await webView.CoreWebView2.ExecuteScriptAsync(saveMainButtonScript)) ?? "missing";
+                                        _log.Info("save", $"fallbackMainSave={fallbackSave}");
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                // Wait briefly for network confirmation or DOM "Saved" state (exits early as soon as confirmed).
+                // Wait for network POST confirmation or main closeup DOM "Saved" state (exits immediately once confirmed).
                 var domSaysSaved = false;
-                if (!alreadySaved)
+                if (!alreadySaved && clickedSave)
                 {
                     const string verifySavedScript = """
                         (() => {
-                            const btns = Array.from(document.querySelectorAll('[data-test-id="PinBetterSaveButton"], [data-test-id="PinBetterSaveButton"] button, button'));
-                            return btns.some(b => (b.innerText || '').trim().toLowerCase() === 'saved');
+                            const root = document.querySelector('[data-test-id="closeup-action-bar"], [data-test-id="closeup-body"]') || document;
+                            const btns = Array.from(root.querySelectorAll('[data-test-id="PinBetterSaveButton"], [data-test-id="PinBetterSaveButton"] button, button'));
+                            return btns.some(b => {
+                                const r = b.getBoundingClientRect();
+                                return r.width > 0 && r.top >= 0 && r.top < 500 &&
+                                       (b.innerText || '').trim().toLowerCase() === 'saved';
+                            });
                         })()
                         """;
-                    for (var i = 0; i < 12; i++)
+                    for (var i = 0; i < 20; i++)
                     {
                         if (repinConfirmedByNetwork)
                         {
@@ -592,12 +777,15 @@ public sealed class PinterestSyncService : IDisposable
                         domSaysSaved = await webView.CoreWebView2.ExecuteScriptAsync(verifySavedScript) == "true";
                         if (domSaysSaved)
                         {
+                            await Task.Delay(TimeSpan.FromMilliseconds(350), ct);
                             break;
                         }
 
-                        await Task.Delay(TimeSpan.FromMilliseconds(180), ct);
+                        await Task.Delay(TimeSpan.FromMilliseconds(150), ct);
                     }
                 }
+
+                _log.Info("save", $"done already={alreadySaved} clicked={clickedSave} net={repinConfirmedByNetwork} dom={domSaysSaved}");
 
                 var dest = string.IsNullOrEmpty(boardName) ? "My Saves" : $"board '{boardName}'";
                 if (alreadySaved)
@@ -615,6 +803,7 @@ public sealed class PinterestSyncService : IDisposable
             }
             catch (Exception ex)
             {
+                _log.Info(actionTag, $"exception={ex.GetType().Name}: {ex.Message}");
                 tcs.TrySetResult(new PinActionResult(false, true, $"Background action failed ({ex.Message}); opening in browser."));
             }
             finally
@@ -663,7 +852,7 @@ public sealed class PinterestSyncService : IDisposable
         ShowInTaskbar = false,
         ShowActivated = false,
         WindowStyle = WindowStyle.None,
-        Opacity = 0,
+        Opacity = 1,
         Content = webView
     };
 

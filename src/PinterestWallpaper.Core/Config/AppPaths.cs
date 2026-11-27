@@ -8,6 +8,8 @@ public sealed class AppPaths
     public string DatabaseFile => Path.Combine(DataDirectory, "state.db");
     public string CacheDirectory => Path.Combine(DataDirectory, "cache");
     public string WebView2Directory => Path.Combine(DataDirectory, "WebView2");
+    public string LogsDirectory => Path.Combine(DataDirectory, "logs");
+    public string ActionLogFile => Path.Combine(LogsDirectory, "actions.log");
 
     public AppPaths(string? configDir = null, string? dataDir = null)
     {
