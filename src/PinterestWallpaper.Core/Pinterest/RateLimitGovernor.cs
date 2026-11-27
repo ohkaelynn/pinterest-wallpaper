@@ -76,10 +76,10 @@ public sealed class RateLimitGovernor
     }
 
     public TimeSpan GetHumanStepDelay() =>
-        TimeSpan.FromMilliseconds(_random.Next(900, 1800));
+        TimeSpan.FromMilliseconds(_random.Next(700, 1300));
 
     public TimeSpan GetImageDownloadDelay() =>
-        TimeSpan.FromMilliseconds(_random.Next(150, 350));
+        TimeSpan.FromMilliseconds(_random.Next(100, 200));
 
     public void RecordSuccess(int pinsAdded, DateTimeOffset nowUtc)
     {

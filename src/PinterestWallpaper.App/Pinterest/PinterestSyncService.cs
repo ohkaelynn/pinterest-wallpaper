@@ -324,7 +324,7 @@ public sealed class PinterestSyncService : IDisposable
             }
             finally
             {
-                WebView2Cleanup.DisposeAndRelease(webView, hostWindow);
+                await WebView2Cleanup.DisposeAndReleaseAsync(webView, hostWindow);
             }
         });
 
@@ -364,7 +364,15 @@ public sealed class PinterestSyncService : IDisposable
                         return;
                     }
 
-                    if (args.Response.StatusCode is 429 or 403)
+                    if (args.Response.StatusCode == 429)
+                    {
+                        rateLimited = true;
+                        return;
+                    }
+
+                    if (args.Response.StatusCode == 403 &&
+                        (args.Request.Uri.Contains("/resource/", StringComparison.OrdinalIgnoreCase) ||
+                         args.Request.Uri.Contains("/graphql", StringComparison.OrdinalIgnoreCase)))
                     {
                         rateLimited = true;
                         return;
@@ -385,7 +393,7 @@ public sealed class PinterestSyncService : IDisposable
                 await NavigateAndWaitAsync(webView, pinUrl, ct);
                 await WaitForConditionAsync(webView,
                     "!!document.querySelector('[data-test-id=\"PinBetterSaveButton\"], [data-test-id=\"reactions-button\"], button[aria-label=\"Save\"]')",
-                    maxWaitMs: 3000, ct);
+                    maxWaitMs: 7000, ct);
 
                 if (rateLimited)
                 {
@@ -482,25 +490,33 @@ public sealed class PinterestSyncService : IDisposable
                     var opened = await webView.CoreWebView2.ExecuteScriptAsync(openDropdownScript);
                     if (opened == "true")
                     {
-                        await WaitForConditionAsync(webView,
-                            "!!document.querySelector('input[aria-label=\"Search\"], input[placeholder*=\"Search\"]')",
-                            maxWaitMs: 2000, ct);
+                        // Wait specifically for the Save popover's search input (excluding Pinterest's main header search bar).
+                        const string findPopoverSearchExpr = """
+                            (() => {
+                                const inputs = Array.from(document.querySelectorAll('input[aria-label="Search"], input[placeholder*="Search"], [data-test-id="board-picker-search-input"] input, #pickerSearchField'));
+                                return inputs.some(i => i.id !== 'searchBoxInput' && !i.closest('header') && !i.closest('[data-test-id="search-box-input"]'));
+                            })()
+                            """;
+                        await WaitForConditionAsync(webView, findPopoverSearchExpr, maxWaitMs: 3500, ct);
+
                         var escapedBoard = JsonSerializer.Serialize(boardName);
                         var searchBoardScript = $$"""
                             (() => {
-                                const input = document.querySelector('input[aria-label="Search"], input[placeholder*="Search"]');
+                                const inputs = Array.from(document.querySelectorAll('#pickerSearchField, [data-test-id="board-picker-search-input"] input, input[aria-label="Search"], input[placeholder*="Search"]'));
+                                const input = inputs.find(i => i.id !== 'searchBoxInput' && !i.closest('header') && !i.closest('[data-test-id="search-box-input"]'));
                                 if (input) {
                                     input.focus();
                                     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                     setter.call(input, {{escapedBoard}});
                                     input.dispatchEvent(new Event('input', { bubbles: true }));
                                     input.dispatchEvent(new Event('change', { bubbles: true }));
+                                    return true;
                                 }
-                                return true;
+                                return false;
                             })()
                             """;
                         await webView.CoreWebView2.ExecuteScriptAsync(searchBoardScript);
-                        await Task.Delay(TimeSpan.FromMilliseconds(550), ct);
+                        await Task.Delay(TimeSpan.FromMilliseconds(650), ct);
 
                         // Hover matching board row so Pinterest renders its row Save button, then click Save or the row.
                         var hoverRowScript = $$"""
@@ -603,7 +619,7 @@ public sealed class PinterestSyncService : IDisposable
             }
             finally
             {
-                WebView2Cleanup.DisposeAndRelease(webView, hostWindow);
+                await WebView2Cleanup.DisposeAndReleaseAsync(webView, hostWindow);
             }
         });
 
@@ -671,7 +687,8 @@ public sealed class PinterestSyncService : IDisposable
 
             try
             {
-                var candidates = new ConcurrentQueue<(string SourceType, string SourceValue, ExtractedPin Pin)>();
+                var verifiedCandidates = new ConcurrentQueue<(string SourceType, string SourceValue, ExtractedPin Pin)>();
+                var domFallbackCandidates = new ConcurrentQueue<(string SourceType, string SourceValue, ExtractedPin Pin)>();
                 var seenIds = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
                 var rateLimited = false;
                 var loginRequired = false;
@@ -696,14 +713,21 @@ public sealed class PinterestSyncService : IDisposable
                         }
 
                         var status = args.Response.StatusCode;
-                        if (status is 429 or 403)
+                        if (status == 429)
                         {
                             rateLimited = true;
                             return;
                         }
 
-                        if (!url.Contains("/resource/", StringComparison.OrdinalIgnoreCase) &&
-                            !url.Contains("/graphql", StringComparison.OrdinalIgnoreCase))
+                        var isApi = url.Contains("/resource/", StringComparison.OrdinalIgnoreCase) ||
+                                    url.Contains("/graphql", StringComparison.OrdinalIgnoreCase);
+                        if (status == 403 && isApi)
+                        {
+                            rateLimited = true;
+                            return;
+                        }
+
+                        if (!isApi)
                         {
                             return;
                         }
@@ -724,7 +748,7 @@ public sealed class PinterestSyncService : IDisposable
                         {
                             if (!_db.IsBlocked(pin.PinId) && _db.GetPinById(pin.PinId) is null && seenIds.TryAdd(pin.PinId, 0))
                             {
-                                candidates.Enqueue((currentSourceType, currentSourceValue, pin));
+                                verifiedCandidates.Enqueue((currentSourceType, currentSourceValue, pin));
                             }
                         }
                     }
@@ -735,11 +759,11 @@ public sealed class PinterestSyncService : IDisposable
                 };
 
                 var maxScrolls = Math.Clamp(config.Fetching.MaxScrollStepsPerSource, 1, 8);
-                var collectCap = Math.Max(targetCandidateCount * 3, 45);
+                var collectCap = targetCandidateCount + 5;
 
                 foreach (var (sourceType, sourceValue, url) in targets)
                 {
-                    if (ct.IsCancellationRequested || rateLimited || loginRequired || candidates.Count >= collectCap)
+                    if (ct.IsCancellationRequested || rateLimited || loginRequired || verifiedCandidates.Count >= collectCap)
                     {
                         break;
                     }
@@ -757,23 +781,35 @@ public sealed class PinterestSyncService : IDisposable
                         break;
                     }
 
-                    await ExtractEmbeddedPageJsonAsync(webView, config.Filters, sourceType, sourceValue, seenIds, candidates);
-                    await ExtractDomPinsAsync(webView, config.Filters, sourceType, sourceValue, seenIds, candidates);
+                    await ExtractEmbeddedPageJsonAsync(webView, config.Filters, sourceType, sourceValue, seenIds, verifiedCandidates);
 
                     for (var step = 0; step < maxScrolls; step++)
                     {
-                        if (ct.IsCancellationRequested || rateLimited || candidates.Count >= collectCap)
+                        if (ct.IsCancellationRequested || rateLimited || verifiedCandidates.Count >= collectCap)
                         {
                             break;
                         }
 
                         await webView.CoreWebView2.ExecuteScriptAsync("window.scrollBy(0, 1400);");
                         await Task.Delay(_governor.GetHumanStepDelay(), ct);
-                        await ExtractDomPinsAsync(webView, config.Filters, sourceType, sourceValue, seenIds, candidates);
+                    }
+
+                    // Only collect unverified DOM thumbnails if XHR/SSR didn't already give us enough verified pins.
+                    if (verifiedCandidates.Count < targetCandidateCount && !ct.IsCancellationRequested && !rateLimited)
+                    {
+                        await ExtractDomPinsAsync(webView, config.Filters, sourceType, sourceValue, seenIds, domFallbackCandidates);
                     }
                 }
 
-                tcs.TrySetResult(new CollectResult(candidates.ToList(), rateLimited, loginRequired));
+                // Always prioritize dimension-verified XHR/SSR pins first; only append capped DOM fallback if needed.
+                var ordered = verifiedCandidates.ToList();
+                if (ordered.Count < targetCandidateCount)
+                {
+                    var fallbackBudget = Math.Min(domFallbackCandidates.Count, (targetCandidateCount - ordered.Count) * 2);
+                    ordered.AddRange(domFallbackCandidates.Take(fallbackBudget));
+                }
+
+                tcs.TrySetResult(new CollectResult(ordered, rateLimited, loginRequired));
             }
             catch (Exception ex)
             {
@@ -781,7 +817,7 @@ public sealed class PinterestSyncService : IDisposable
             }
             finally
             {
-                WebView2Cleanup.DisposeAndRelease(webView, hostWindow);
+                await WebView2Cleanup.DisposeAndReleaseAsync(webView, hostWindow);
             }
         });
 

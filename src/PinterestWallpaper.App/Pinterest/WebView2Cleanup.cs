@@ -8,11 +8,19 @@ namespace PinterestWallpaper.App.Pinterest;
 public static class WebView2Cleanup
 {
     /// <summary>
-    /// Cleanly disposes a WebView2 host window and ensures its private msedgewebview2.exe
-    /// browser process tree exits (preventing Pinterest's sw.js service worker from keeping
-    /// ~300 MB of WebView2 processes alive while the tray app is idle).
+    /// Fire-and-forget cleanup for standalone windows (e.g. Login window).
     /// </summary>
     public static void DisposeAndRelease(WebView2? webView, Window? hostWindow = null)
+    {
+        _ = DisposeAndReleaseAsync(webView, hostWindow);
+    }
+
+    /// <summary>
+    /// Disposes a WebView2 host window and waits for its private msedgewebview2.exe
+    /// browser process tree to exit before returning, preventing race conditions with
+    /// back-to-back sync/like/save operations and stopping Pinterest's sw.js from lingering.
+    /// </summary>
+    public static async Task DisposeAndReleaseAsync(WebView2? webView, Window? hostWindow = null)
     {
         uint browserPid = 0;
         try
@@ -33,13 +41,13 @@ public static class WebView2Cleanup
             return;
         }
 
-        _ = Task.Run(async () =>
+        await Task.Run(async () =>
         {
             try
             {
                 // Give Chromium a moment to flush cookies/session state to disk and exit naturally.
                 using var proc = Process.GetProcessById((int)browserPid);
-                for (var i = 0; i < 15 && !proc.HasExited; i++)
+                for (var i = 0; i < 12 && !proc.HasExited; i++)
                 {
                     await Task.Delay(150);
                 }
@@ -48,6 +56,7 @@ public static class WebView2Cleanup
                     proc.ProcessName.Equals("msedgewebview2", StringComparison.OrdinalIgnoreCase))
                 {
                     proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit(1000);
                 }
             }
             catch
@@ -58,6 +67,6 @@ public static class WebView2Cleanup
             {
                 MemoryTrimmer.TrimIdleMemory();
             }
-        });
+        }).ConfigureAwait(false);
     }
 }
