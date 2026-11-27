@@ -29,8 +29,8 @@ public sealed class ShellConfig
 public sealed class RotationConfig
 {
     public bool Enabled { get; set; } = true;
-    public int IntervalMinutes { get; set; } = 30;
-    public int JitterPercent { get; set; } = 15;
+    public int IntervalMinutes { get; set; } = 15;
+    public int JitterPercent { get; set; } = 10;
     public bool PauseOnBattery { get; set; } = true;
     public bool PauseOnFullscreen { get; set; } = true;
 }
@@ -94,7 +94,7 @@ public sealed class FilterConfig
     public int MaxWidth { get; set; } = 10000;
     public int MaxHeight { get; set; } = 10000;
     public ImageOrientation Orientation { get; set; } = ImageOrientation.Landscape;
-    public double AspectRatioMin { get; set; } = 1.25;
+    public double AspectRatioMin { get; set; } = 1.2;
     public double AspectRatioMax { get; set; } = 3.6;
     public bool DeduplicateSimilar { get; set; } = true;
 }
@@ -102,7 +102,7 @@ public sealed class FilterConfig
 public sealed class FetchingConfig
 {
     public int LowWaterMark { get; set; } = 10;
-    public int TargetPoolSize { get; set; } = 50;
+    public int TargetPoolSize { get; set; } = 40;
     public int MaxPinsPerSync { get; set; } = 25;
     public int MaxCacheMb { get; set; } = 500;
     public int MinSyncCooldownMinutes { get; set; } = 30;

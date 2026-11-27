@@ -81,14 +81,19 @@ public sealed class PinterestSyncService : IDisposable
             }
 
             _db.SetStateValue(SessionStatusKey, "signed_in");
-            var (added, filteredOut) = await DownloadAndFilterSequentiallyAsync(collectResult.Candidates, config, needed, ct);
+            var stats = await DownloadAndFilterSequentiallyAsync(collectResult.Candidates, config, needed, ct);
             CacheManager.EnforceMaxCacheSize(_db, _paths.CacheDirectory, config.Fetching.MaxCacheMb);
-            _governor.RecordSuccess(added, DateTimeOffset.UtcNow);
+            _governor.RecordSuccess(stats.Added, DateTimeOffset.UtcNow);
 
-            var msg = filteredOut > 0
-                ? $"Synced {added} wallpaper(s) ({filteredOut} skipped by resolution/orientation filters)."
-                : $"Synced {added} new wallpaper(s) into local cache.";
-            return new SyncResult(true, added, msg);
+            var skippedParts = new List<string>();
+            if (stats.TooSmall > 0) skippedParts.Add($"{stats.TooSmall} too small");
+            if (stats.WrongAspectOrOrientation > 0) skippedParts.Add($"{stats.WrongAspectOrOrientation} aspect/orient");
+            if (stats.Duplicates > 0) skippedParts.Add($"{stats.Duplicates} dupes");
+
+            var msg = skippedParts.Count > 0
+                ? $"Synced {stats.Added} wallpaper(s) ({string.Join(", ", skippedParts)})."
+                : $"Synced {stats.Added} new wallpaper(s) into local cache.";
+            return new SyncResult(true, stats.Added, msg);
         }
         finally
         {
@@ -951,7 +956,9 @@ public sealed class PinterestSyncService : IDisposable
         return Task.WhenAny(navTcs.Task, Task.Delay(TimeSpan.FromSeconds(20), ct));
     }
 
-    private async Task<(int Added, int FilteredOut)> DownloadAndFilterSequentiallyAsync(
+    private sealed record DownloadStats(int Added, int TooSmall, int WrongAspectOrOrientation, int Duplicates);
+
+    private async Task<DownloadStats> DownloadAndFilterSequentiallyAsync(
         List<(string SourceType, string SourceValue, ExtractedPin Pin)> candidates,
         AppConfig config,
         int maxToAdd,
@@ -960,7 +967,9 @@ public sealed class PinterestSyncService : IDisposable
         Directory.CreateDirectory(_paths.CacheDirectory);
         var existingHashes = _db.GetAllPerceptualHashes().ToList();
         var added = 0;
-        var filteredOut = 0;
+        var tooSmall = 0;
+        var wrongAspect = 0;
+        var duplicates = 0;
 
         foreach (var (sourceType, sourceValue, pin) in candidates)
         {
@@ -999,7 +1008,6 @@ public sealed class PinterestSyncService : IDisposable
                 if (response.Content.Headers.ContentLength is long contentLen &&
                     contentLen > PinterestUrlGuard.MaxImageDownloadBytes)
                 {
-                    filteredOut++;
                     continue;
                 }
 
@@ -1026,7 +1034,6 @@ public sealed class PinterestSyncService : IDisposable
                 if (exceededLimit)
                 {
                     File.Delete(tempPath);
-                    filteredOut++;
                     continue;
                 }
 
@@ -1034,7 +1041,13 @@ public sealed class PinterestSyncService : IDisposable
                 if (!check.IsValid)
                 {
                     File.Delete(tempPath);
-                    filteredOut++;
+                    var reason = check.RejectionReason ?? string.Empty;
+                    if (reason.Contains("Duplicate", StringComparison.OrdinalIgnoreCase))
+                        duplicates++;
+                    else if (reason.Contains("resolution", StringComparison.OrdinalIgnoreCase))
+                        tooSmall++;
+                    else
+                        wrongAspect++;
                     continue;
                 }
 
@@ -1066,7 +1079,7 @@ public sealed class PinterestSyncService : IDisposable
             }
         }
 
-        return (added, filteredOut);
+        return new DownloadStats(added, tooSmall, wrongAspect, duplicates);
     }
 
     public void Dispose()

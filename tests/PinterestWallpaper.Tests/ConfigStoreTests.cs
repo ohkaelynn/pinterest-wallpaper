@@ -15,7 +15,7 @@ public sealed class ConfigStoreTests : IDisposable
 
         var created = store.LoadOrCreate();
         Assert.True(File.Exists(path));
-        Assert.Equal(30, created.Rotation.IntervalMinutes);
+        Assert.Equal(15, created.Rotation.IntervalMinutes);
         Assert.Equal(30, created.Fetching.MinSyncCooldownMinutes);
 
         created.Fetching.MinSyncCooldownMinutes = 1; // Attempt to set aggressively low cooldown

@@ -25,6 +25,20 @@ public sealed class ImageFilterTests : IDisposable
         Assert.True(ImageFilter.ValidateDimensions(3440, 1440, filter).IsValid);
         Assert.False(ImageFilter.ValidateDimensions(1280, 720, filter).IsValid);
         Assert.False(ImageFilter.ValidateDimensions(1920, 2400, filter).IsValid); // Portrait
+
+        // Orientation.Any accepts both landscape and portrait regardless of landscape AspectRatioMin
+        var anyFilter = new FilterConfig
+        {
+            MinWidth = 1280,
+            MinHeight = 720,
+            Orientation = ImageOrientation.Any,
+            AspectRatioMin = 1.3,
+            AspectRatioMax = 3.6
+        };
+        Assert.True(ImageFilter.ValidateDimensions(1280, 720, anyFilter).IsValid);
+        Assert.True(ImageFilter.ValidateDimensions(720, 1280, anyFilter).IsValid);
+        Assert.True(ImageFilter.ValidateDimensions(1280, 1280, anyFilter).IsValid); // Square
+        Assert.False(ImageFilter.ValidateDimensions(500, 900, anyFilter).IsValid); // Too small
     }
 
     [Fact]

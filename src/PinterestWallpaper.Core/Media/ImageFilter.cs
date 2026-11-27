@@ -93,30 +93,68 @@ public static class ImageFilter
 
     public static ImageCheckResult ValidateDimensions(int width, int height, FilterConfig filter)
     {
-        if (width < filter.MinWidth || height < filter.MinHeight)
-        {
-            return new ImageCheckResult(false, $"Below minimum resolution ({width}x{height} < {filter.MinWidth}x{filter.MinHeight}).", width, height);
-        }
-
         if (width > filter.MaxWidth || height > filter.MaxHeight)
         {
             return new ImageCheckResult(false, $"Above maximum resolution ({width}x{height}).", width, height);
         }
 
-        if (filter.Orientation == ImageOrientation.Landscape && width < height)
+        if (filter.Orientation == ImageOrientation.Landscape)
         {
-            return new ImageCheckResult(false, "Orientation is portrait; expected landscape.", width, height);
-        }
+            if (width < height)
+            {
+                return new ImageCheckResult(false, "Orientation is portrait; expected landscape.", width, height);
+            }
 
-        if (filter.Orientation == ImageOrientation.Portrait && height < width)
-        {
-            return new ImageCheckResult(false, "Orientation is landscape; expected portrait.", width, height);
-        }
+            if (width < filter.MinWidth || height < filter.MinHeight)
+            {
+                return new ImageCheckResult(false, $"Below minimum resolution ({width}x{height} < {filter.MinWidth}x{filter.MinHeight}).", width, height);
+            }
 
-        var aspect = (double)width / height;
-        if (aspect < filter.AspectRatioMin || aspect > filter.AspectRatioMax)
+            var aspect = (double)width / height;
+            if (aspect < filter.AspectRatioMin || aspect > filter.AspectRatioMax)
+            {
+                return new ImageCheckResult(false, $"Aspect ratio {aspect:F2} outside [{filter.AspectRatioMin:F2}, {filter.AspectRatioMax:F2}].", width, height);
+            }
+        }
+        else if (filter.Orientation == ImageOrientation.Portrait)
         {
-            return new ImageCheckResult(false, $"Aspect ratio {aspect:F2} outside [{filter.AspectRatioMin:F2}, {filter.AspectRatioMax:F2}].", width, height);
+            if (height < width)
+            {
+                return new ImageCheckResult(false, "Orientation is landscape; expected portrait.", width, height);
+            }
+
+            var reqLong = Math.Max(filter.MinWidth, filter.MinHeight);
+            var reqShort = Math.Min(filter.MinWidth, filter.MinHeight);
+            if (height < reqLong || width < reqShort)
+            {
+                return new ImageCheckResult(false, $"Below minimum resolution ({width}x{height}).", width, height);
+            }
+
+            var portraitRatio = (double)height / width;
+            if (portraitRatio < filter.AspectRatioMin || portraitRatio > filter.AspectRatioMax)
+            {
+                return new ImageCheckResult(false, $"Aspect ratio {portraitRatio:F2} outside [{filter.AspectRatioMin:F2}, {filter.AspectRatioMax:F2}].", width, height);
+            }
+        }
+        else
+        {
+            // Orientation.Any: allow both landscape and portrait by comparing long/short edges,
+            // and allow square/portrait aspect ratios without being blocked by landscape AspectRatioMin.
+            var longEdge = Math.Max(width, height);
+            var shortEdge = Math.Min(width, height);
+            var reqLong = Math.Max(filter.MinWidth, filter.MinHeight);
+            var reqShort = Math.Min(filter.MinWidth, filter.MinHeight);
+
+            if (longEdge < reqLong || shortEdge < reqShort)
+            {
+                return new ImageCheckResult(false, $"Below minimum resolution ({width}x{height}).", width, height);
+            }
+
+            var ratio = (double)longEdge / shortEdge;
+            if (ratio > filter.AspectRatioMax)
+            {
+                return new ImageCheckResult(false, $"Aspect ratio {ratio:F2} exceeds max {filter.AspectRatioMax:F2}.", width, height);
+            }
         }
 
         return new ImageCheckResult(true, null, width, height);
